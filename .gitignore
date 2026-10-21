@@ -1,0 +1,40 @@
+# --- secrets: never commit ---
+# Real env files. Only *.example templates are tracked.
+.env
+.env.*
+!.env.*.example
+*.pem
+*.key
+*.crt
+*.p12
+certs/
+secrets/
+
+# --- runtime state ---
+# Personal memory IS tracked (it's the asset). These are not.
+audit/*.log
+audit/*.jsonl
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+hermes-data/
+
+# --- python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# --- editors / os ---
+.DS_Store
+*.swp
+.idea/
+.vscode/
