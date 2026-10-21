@@ -36,7 +36,9 @@ Hermes connects to the gateway over HTTP/SSE with mTLS. It does not spawn it.
 
 **Cost:** slightly more M0 setup (certificates, a second container). **Benefit:** the AWS move is two containers in one compose file rather than a re-architecture.
 
-**Also settled here:** `sampling: false` and `elicitation: false` on the MCP server. Both default to **on** in Hermes. Elicitation would surface approval prompts as Telegram buttons *through the agent* — the exact thing the separate approver bot exists to avoid.
+**Also settled here:** sampling and elicitation are disabled on the MCP server. Both default to **on** in Hermes. Elicitation would surface approval prompts as Telegram buttons *through the agent* — the exact thing the separate approver bot exists to avoid.
+
+> **Syntax corrected by the M0a spike entry below.** This entry originally gave the form as `sampling: false` / `elicitation: false`. That is wrong and crashes at startup; the real shape is `sampling: {enabled: false}`.
 
 ---
 
@@ -47,6 +49,8 @@ The first draft treated this as early-days caution to relax later.
 **Why it changed:** a Hermes skill that declares `required_environment_variables` in its frontmatter gets those variables forwarded into the sandbox **automatically, with no config change**. Hermes authors its own skills. That is a path from "the agent wrote a skill" to "a secret is in the sandbox" that never crosses my desk. Skill write approval is what closes it.
 
 Related: `HERMES_WRITE_SAFE_ROOT` is set, and `terminal.env_passthrough` is explicitly empty alongside `docker_forward_env`.
+
+> **Strengthened by the M0a spike entry below.** `env_passthrough: []` turns out **not** to block skill-declared passthrough — those variables are forwarded automatically regardless. Skill write approval is the only control, with nothing behind it.
 
 ---
 
@@ -95,3 +99,36 @@ The **gateway**, not Hermes, is the OAuth 2.1 PKCE client.
 Running v0.22.2 (published Oct 15 2026).
 
 **Why, concretely:** v0.22.1 was built from the wrong commit and shipped unreleased gateway functionality; v0.22.2 is the correction. The repo also carries ~50k open issues. The first draft's "pin a release" instinct was right and this is the evidence for it.
+
+---
+
+## 2026-10-20 — M0a spike: Hermes v0.22.2 verified against source
+
+Cloned `v0.22.2` (`d923a5e`) and read the config handling directly rather than trusting the docs. Four findings, two of which would have broken M0.
+
+**1. `sampling` / `elicitation` are nested dicts, not booleans.** From `tools/mcp_tool_server_run.py:268-276`:
+
+```python
+sampling_config = config.get("sampling", {})
+self._sampling = (... if sampling_config.get("enabled", True) and ... else None)
+```
+
+The shape the design doc had inferred (`sampling: false`) would make `config.get("sampling", {})` return `False` and then raise `AttributeError` on `.get()` — a **startup crash**, not an ignored key. Correct form is `sampling: {enabled: false}`. The `("enabled", True)` default also confirms both features are on unless disabled.
+
+**2. `env_passthrough: []` does not close the skill-secret path.** From `hermes_cli/config_defaults.py:326-328`:
+
+```python
+# Env vars passed into sandboxed terminal/execute_code (skill-declared
+# required_environment_variables pass through automatically).
+"env_passthrough": [],
+```
+
+A skill that declares `required_environment_variables` gets them forwarded **whether or not** `env_passthrough` is empty. So the empty list is not a second layer; `skills.write_approval: true` is the only control, and it is load-bearing exactly as the earlier entry claimed — more so, since there is no backstop behind it.
+
+**3. `approvals.mode` defaults to `smart`**, not manual: an auxiliary LLM auto-approves what it judges low-risk. Our `manual` is a deliberate move from "a model decides" to "I decide". Also present and undocumented in the config reference: `approvals.deny` (fnmatch globs that block even under `--yolo`), `smart_policy`, `denial_breaker_threshold`.
+
+**4. Confirmed as documented:** `session_affinity_header` is real (`agent/opencode_affinity.py`) and is merged in `agent/auxiliary_client.py` too, so auxiliary calls carry it as claimed. `docker_forward_env: []` and `HERMES_WRITE_SAFE_ROOT` (os.pathsep-separated) are real. `cron_mode`, `single_query_mode`, `unattended_mode` all exist and already default to `deny`. `client_cert` + `client_key` is a valid pair.
+
+**Lesson for the rest of the project:** the Hermes docs are good but not exact, and this repo is MIT Python sitting on disk. For anything security-relevant, read the source. Two of the four findings above were invisible from the docs.
+
+**Still open from this spike:** live mTLS connection, `session_affinity_header` observed arriving at a real proxy, the two-bot Telegram shape, and docker-backend secret isolation. Those need a running Hermes.

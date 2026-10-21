@@ -205,7 +205,7 @@ Goal for day one: talk to Hermes from Telegram, with exactly one MCP server atta
    terminal:
      backend: docker       # agent shell never touches the host
      docker_forward_env: [] # no secrets forwarded into the container
-     env_passthrough: []    # and none through the skill-scoped path either
+     env_passthrough: []    # no *config-declared* passthrough (see caveat below)
    memory:
      write_approval: true  # I approve every memory save
    skills:
@@ -219,7 +219,8 @@ Goal for day one: talk to Hermes from Telegram, with exactly one MCP server atta
 
    Three things the Hermes docs make clear that change how these settings should be read:
 
-   - **`skills.write_approval: true` is a security control, not tidiness.** A skill that declares `required_environment_variables` in its frontmatter gets those variables forwarded into the sandbox *automatically, with no config change*. Since Hermes authors its own skills, this is a path from "the agent wrote a skill" to "a secret is in the sandbox" that never crosses my desk. Approval on skill writes is what closes it, and it stays on past "at first".
+   - **`skills.write_approval: true` is a security control, not tidiness — and it is the *only* control here.** The v0.22.2 source is explicit: *"Env vars passed into sandboxed terminal/execute_code (skill-declared `required_environment_variables` pass through automatically)."* Note what that means: **setting `env_passthrough: []` does not close the skill path.** A skill that declares the variable gets it, empty list or not. Since Hermes authors its own skills, the only point of control is approving the skill before it exists. This setting stays on permanently.
+   - **`approvals.mode` defaults to `smart`**, where an auxiliary LLM auto-approves commands it judges low-risk. `manual` is a deliberate downgrade from "a model decides" to "I decide". Related knobs worth knowing: `approvals.deny` (fnmatch globs that block even under `--yolo`), `smart_policy`, and `denial_breaker_threshold`.
    - **The Docker backend skips dangerous-command approval entirely** — container backends bypass those checks because the container *is* the boundary. So `backend: docker` and `approvals.mode: manual` are not two layers over the shell; they are one. That is acceptable only because the gateway, not the approval prompt, is our real boundary.
    - **User authorization** is an allowlist (`TELEGRAM_ALLOWED_USERS`) plus a DM-pairing flow (pairing codes approved with `hermes pairing approve`), with deny as the default. Confirm the pairing flow is off or scoped before exposing the bot.
 4. **Attach the gateway as the only MCP server — over HTTP, not as a subprocess.** Start with a stub that exposes `ping` and `memory.get`.
@@ -230,8 +231,10 @@ Goal for day one: talk to Hermes from Telegram, with exactly one MCP server atta
        url: "https://127.0.0.1:8443/mcp"
        client_cert: "~/.hermes/certs/hermes.crt"   # mTLS; the gateway pins this
        client_key: "~/.hermes/certs/hermes.key"
-       sampling: false       # the gateway never asks Hermes for inference
-       elicitation: false    # no approval path that routes through the agent
+       sampling:
+         enabled: false      # the gateway never asks Hermes for inference
+       elicitation:
+         enabled: false      # no approval path that routes through the agent
    ```
 
    **Why not stdio.** The obvious config spawns the gateway as a child process (`command: uv`, `args: ["run", "chhaya-gateway"]`). Three reasons not to:
@@ -244,7 +247,7 @@ Goal for day one: talk to Hermes from Telegram, with exactly one MCP server atta
 
    Sampling and elicitation are both **on by default** in Hermes and are turned off deliberately above. Elicitation in particular would surface approval prompts as Telegram buttons *through the agent* — precisely what the separate approver bot exists to avoid.
 
-   > **Unverified:** `url`, `client_cert` and `client_key` are documented MCP server keys; the exact spelling of the `sampling` / `elicitation` disable keys is not in the config reference and is inferred. Confirm against v0.22.2 during M0 — and if there is no per-server switch, the fallback is `tools.exclude` plus a gateway that simply refuses sampling requests.
+   > **Verified in v0.22.2 source** (`tools/mcp_tool_server_run.py:268-276`). Both are **nested dicts, not booleans**, and both default to on: `config.get("sampling", {}).get("enabled", True)`. Writing `sampling: false` would make `config.get(...)` return `False` and then raise `AttributeError` on `.get()` — a startup crash, not a silently ignored key. `client_cert` + `client_key` is a valid pair (the list form `client_cert: [cert, key]` is the alternative; supplying both forms is rejected).
 
    Do **not** install Swiggy or GitHub MCPs into Hermes directly; the gateway connects to them as a client.
 5. **Approvals channel.** The gateway sends its own approval prompts through a **second Telegram bot** ("chhaya-approver") so the agent process can never see or click its own approvals. The same bot carries `/stop` and `/resume`, for the same reason. Hermes' MCP elicitation support (form prompts surfaced as Telegram buttons) is a simpler v0 shortcut, but it routes through the agent — and so cannot carry the kill switch at all.
