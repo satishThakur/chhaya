@@ -132,3 +132,36 @@ A skill that declares `required_environment_variables` gets them forwarded **whe
 **Lesson for the rest of the project:** the Hermes docs are good but not exact, and this repo is MIT Python sitting on disk. For anything security-relevant, read the source. Two of the four findings above were invisible from the docs.
 
 **Still open from this spike:** live mTLS connection, `session_affinity_header` observed arriving at a real proxy, the two-bot Telegram shape, and docker-backend secret isolation. Those need a running Hermes.
+
+---
+
+## 2026-10-21 — M0a spike: runtime verification, and Hermes cannot be run from source here
+
+Second half of the spike. Stood up a real MCP server over mutual TLS and exercised Hermes' own code against it.
+
+**Verified working**
+
+- **mTLS MCP transport.** Full `initialize` → `tools/list` → `tools/call` against an HTTPS MCP server with `ssl.CERT_REQUIRED`. The server logged `client_cert_cn='hermes-client'` on every request. Negative control — same client, no certificate — was rejected at the TLS layer (`certificate required` / `httpx2.ReadError`). Hermes' own `_resolve_client_cert` turns our `client_cert` + `client_key` config into the correct httpx tuple. **The standalone-gateway decision is sound at the transport level.**
+- **`session_affinity_header`.** Using Hermes' own functions against a real `~/.hermes/config.yaml`: the header name resolves from the provider entry, `custom_provider_session_affinity_headers` stamps it with the session id, and an endpoint that did not opt in gets `{}`. Trace correlation works as designed, with no fork.
+
+**Hermes v0.22.2 cannot be run from a source checkout on this machine**
+
+`.python-version` pins **3.14**, and `uv sync` discards any venv you made and rebuilds on **3.14.0a6** — an alpha. On that interpreter:
+
+```
+import charset_normalizer   →  Segmentation fault (exit 139)
+```
+
+Same wheel (3.5.2) on stable 3.12.10 imports fine. `requests` imports `charset_normalizer`, so any Hermes path touching `requests` dies — which includes the model-catalog import chain reached from ordinary config lookups.
+
+**Consequences**
+
+1. **Run Hermes from its official Docker image, not a source checkout.** The image pins a combination its authors test; our reconstruction via `uv sync` is not that. The design already containerises Hermes, so this costs nothing — it just makes the container mandatory rather than tidy.
+2. **The gateway never shares an interpreter, venv or image with Hermes.** Already true process-wise from the standalone-service decision; this extends it to the runtime. Our code targets stable Python 3.12.
+3. Source checkouts stay useful for *reading* — which is how the two config errors were found — just not for running.
+
+**Not claimed:** that Hermes is broken for everyone. This is one Linux x86_64 reconstruction of their lock. The official image may ship a working build; we have not tested it.
+
+**Incidental, but it will bite someone**
+
+The MCP Python SDK has moved on: `streamablehttp_client` → `streamable_http_client`, it now takes `http_client=` built on **`httpx2`** (not `httpx`), and result fields are snake_case (`server_info`, not `serverInfo`). Hermes imports the SDK lazily via `_ensure_mcp_sdk`, so it is not in the base dependency set. Relevant when the gateway acts as an MCP *client* to Swiggy.
