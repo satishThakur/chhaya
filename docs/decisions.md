@@ -221,3 +221,23 @@ Deployed without that step, every approval request would vanish and every tier-2
 - The numeric user id (`8726466304`) was confirmed against both bots independently rather than trusted from a third-party lookup bot.
 
 **Spike complete.** Every M0a question is answered: MCP over mTLS, trace correlation via `session_affinity_header`, the four config keys, the official image as the runtime, and the two-bot approval channel. Four corrections to the design came out of it, two of which would have broken M0 on first run, plus one error of my own (the Python "alpha" claim) caught and reversed.
+
+---
+
+## 2026-10-21 — Pin Hermes v0.22.3 by digest; verification is now a script
+
+Re-verified against **v0.22.3** (published Oct 21, same day I pinned v0.22.2) and moved the pin.
+
+```
+nousresearch/hermes-agent@sha256:1d33f6087fab79d580ffaec34ceed825e11d7bb8e803206be75a56d027c62538
+```
+
+All seven assumptions hold on both v0.22.2 and v0.22.3: stable interpreter (3.14.7), clean `requests`/`charset_normalizer` import, session-affinity stamping with no leak to other endpoints, `sampling`/`elicitation` still nested dicts defaulting to on, skill-declared env vars still auto-forwarded, `approvals.mode` still defaulting to `smart`, and `HERMES_WRITE_SAFE_ROOT=/opt/data`.
+
+**The check is now `scripts/verify-hermes-image.sh`, not a memory.** Hermes ships every few days; "I checked this once" has a short shelf life, and the assumptions it protects are the ones holding up the safety model. Run it against any new digest before moving the pin. Each check names the decision it defends, so a failure says what to go re-read rather than just going red.
+
+**It caught something on its first real run — and the something was my own check.** The skill-env-passthrough test string-matched a comment in `config_defaults.py`. Between 0.22.2 and 0.22.3 the comment was reworded from *"skill-declared required_environment_variables pass through automatically"* to *"plus skill-declared required_environment_variables"*. Identical meaning, failed test. The check now asserts on `tools/env_passthrough.py`, the actual implementation, instead of prose.
+
+Worth keeping as a rule for the eval suite we are about to write: **assert on behaviour or structure, never on wording.** A test that fails when a comment is rephrased trains you to ignore it, and a safety test you have learned to ignore is worse than no test.
+
+**New in 0.22.3, noted not adopted:** `terminal.client_env_passthrough` — "extra non-secret toolchain names a CLI/TUI client sends". A separate, narrower surface than `env_passthrough`, and explicitly non-secret, but it is a third way for variables to enter the sandbox. Leave unset; revisit if we ever run the TUI client.
