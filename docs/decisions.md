@@ -198,3 +198,26 @@ That is exactly what our proxy will receive. Trace correlation is verified end t
 1. **`HERMES_HOME` must be writable.** Hermes creates `cron/` and other subdirectories at init; a read-only mount fails with `HomeInitializationError`. The data volume cannot be mounted `:ro`.
 2. **`HERMES_WRITE_SAFE_ROOT=/opt/data` is set by default in the image** and resolves correctly (`get_safe_write_roots() -> ['/opt/data']`). The docs' claim is verified; we do not need to set it ourselves when using the image.
 3. **Overriding `--entrypoint` bypasses the privilege drop.** The image declares `USER root` and relies on an s6-overlay stage2 hook to remap to uid 10000 at boot. `docker run --entrypoint sh` lands you at `uid=0(root)`. Our compose must use the real entrypoint, or pass `--user` explicitly — and any debugging shell we open is more privileged than the running agent, which is worth remembering before concluding "the sandbox lets me do X".
+
+---
+
+## 2026-10-21 — M0a spike closed: the two-bot approval channel works
+
+Live test against the real bots. Hermes is `@satish_chhaya_bot` (id 8979753688); approvals and `/stop` ride on `@satish_chhaya_approver_bot` (id 8940896193). Distinct bots, distinct tokens, distinct env files, neither file containing the other's secret. Both have group-join disabled and privacy mode on, so neither can be added to a group or read group traffic.
+
+**Verified end to end:** the approver bot sent an approval card with ✅/❌ inline buttons, the tap came back as a `callback_query` carrying `data=spike:approve` and `from.id` matching the configured allowlist, and `answerCallbackQuery` closed the loop with a toast. That is the exact mechanism tier-2 approvals will use, on a chat Hermes has no token for.
+
+**A failure mode that would have been invisible in production**
+
+A Telegram bot **cannot initiate a conversation** — the user must message it first. Before `/start`, `sendMessage` to the approver bot returns `Bad Request: chat not found`.
+
+Deployed without that step, every approval request would vanish and every tier-2 action would time out into a denial. The system fails closed, which is right, but *silently*, which is not: the symptom is "the agent won't order food" with no stated cause.
+
+**Therefore: the gateway probes the approver chat at startup and refuses to start if it cannot reach me.** A safety channel that is merely unreachable must be loud, not quiet. This is the inverse of the kill switch — that one fails closed and silent on purpose; this one fails closed and noisy. Both are "refuse to act", but only one is a configuration error worth shouting about.
+
+**Operational notes**
+
+- `getUpdates` is destructive-ish: updates stay queued until the offset is advanced past them. Both queues were drained after the test so the gateway is not handed stale approvals on first boot. Long polling and a one-shot `getUpdates` compete for the same queue — only one consumer per bot token, ever. This is an argument for the gateway owning the approver token exclusively, which it already does.
+- The numeric user id (`8726466304`) was confirmed against both bots independently rather than trusted from a third-party lookup bot.
+
+**Spike complete.** Every M0a question is answered: MCP over mTLS, trace correlation via `session_affinity_header`, the four config keys, the official image as the runtime, and the two-bot approval channel. Four corrections to the design came out of it, two of which would have broken M0 on first run, plus one error of my own (the Python "alpha" claim) caught and reversed.
