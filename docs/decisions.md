@@ -144,6 +144,8 @@ Second half of the spike. Stood up a real MCP server over mutual TLS and exercis
 - **mTLS MCP transport.** Full `initialize` → `tools/list` → `tools/call` against an HTTPS MCP server with `ssl.CERT_REQUIRED`. The server logged `client_cert_cn='hermes-client'` on every request. Negative control — same client, no certificate — was rejected at the TLS layer (`certificate required` / `httpx2.ReadError`). Hermes' own `_resolve_client_cert` turns our `client_cert` + `client_key` config into the correct httpx tuple. **The standalone-gateway decision is sound at the transport level.**
 - **`session_affinity_header`.** Using Hermes' own functions against a real `~/.hermes/config.yaml`: the header name resolves from the provider entry, `custom_provider_session_affinity_headers` stamps it with the session id, and an endpoint that did not opt in gets `{}`. Trace correlation works as designed, with no fork.
 
+> **Corrected by the Docker-image entry below.** The headline of this section was wrong: Hermes does **not** pin a Python alpha. It pins **3.14.7 stable** (and uv 0.12.3) in `pm/lock.json`. Our local uv 0.7.3 was too old to know 3.14.7 and resolved `.python-version: 3.14` to the only 3.14 build it had — the alpha. The segfault was our stale toolchain, not a Hermes defect. The operational conclusions below (use the image, isolate the gateway's runtime) still hold, for better reasons.
+
 **Hermes v0.22.2 cannot be run from a source checkout on this machine**
 
 `.python-version` pins **3.14**, and `uv sync` discards any venv you made and rebuilds on **3.14.0a6** — an alpha. On that interpreter:
@@ -165,3 +167,34 @@ Same wheel (3.5.2) on stable 3.12.10 imports fine. `requests` imports `charset_n
 **Incidental, but it will bite someone**
 
 The MCP Python SDK has moved on: `streamablehttp_client` → `streamable_http_client`, it now takes `http_client=` built on **`httpx2`** (not `httpx`), and result fields are snake_case (`server_info`, not `serverInfo`). Hermes imports the SDK lazily via `_ensure_mcp_sdk`, so it is not in the base dependency set. Relevant when the gateway acts as an MCP *client* to Swiggy.
+
+---
+
+## 2026-10-21 — Official Docker image verified; the alpha finding was my error
+
+Pulled `nousresearch/hermes-agent` v0.22.2 by digest (`sha256:a11574b7…`) and re-ran everything that failed from source.
+
+**Correcting yesterday's finding.** I wrote that Hermes pins a Python alpha. It does not. `pm/lock.json` — which the Dockerfile calls the "single authority" — pins **CPython 3.14.7+20260901 (stable)** and **uv 0.12.3**. Our local **uv 0.7.3** predates 3.14.7 and knows only one 3.14 build, `3.14.0a6`, so it resolved `.python-version: 3.14` to the alpha and built the venv on it. The `charset_normalizer` segfault was a consequence of our stale toolchain, not a Hermes defect. Their Dockerfile comment anticipates exactly this class of mistake ("that is exactly the two-authorities failure the pm design exists to end"), and we walked into it.
+
+**The image works.** Python **3.14.7**; `charset_normalizer` 3.5.1 and `requests` 2.33.0 import cleanly; and all four `session_affinity_header` checks pass *inside the real runtime*, including `merge_session_affinity_headers`, which was the call that segfaulted:
+
+```
+1 header name resolved : 'x-chhaya-session-id'
+2 stamped with session : {'x-chhaya-session-id': 'sess-abc123'}
+3 not leaked elsewhere : {}
+4 merged into kwargs   : {'extra_headers': {'x-chhaya-session-id': 'sess-abc123'}}
+```
+
+That is exactly what our proxy will receive. Trace correlation is verified end to end on the runtime we will actually deploy.
+
+**Decisions this settles**
+
+- **Run Hermes from the official image, pinned by digest, not by tag.** Tags move fast: v0.22.2 shipped Oct 15, **v0.22.3 on Oct 21**, and `rc.1-v0.22.4` the same day — two releases in six days, with `latest` and `stable` both already moved. A tag pin is not a pin.
+- **If we ever build from source, use their `pm` provisioner and its pinned uv — never whatever `uv` is on `PATH`.** That is the lesson of the alpha, and it generalises: for Hermes, the lock file is the authority, not the tooling we happen to have.
+- The gateway still gets its own runtime and image. Unchanged, but note the reason has shifted from "Hermes ships an alpha" (false) to "Hermes pins an aggressive, fast-moving toolchain we should not inherit" (true).
+
+**Three operational facts for `deploy/`**
+
+1. **`HERMES_HOME` must be writable.** Hermes creates `cron/` and other subdirectories at init; a read-only mount fails with `HomeInitializationError`. The data volume cannot be mounted `:ro`.
+2. **`HERMES_WRITE_SAFE_ROOT=/opt/data` is set by default in the image** and resolves correctly (`get_safe_write_roots() -> ['/opt/data']`). The docs' claim is verified; we do not need to set it ourselves when using the image.
+3. **Overriding `--entrypoint` bypasses the privilege drop.** The image declares `USER root` and relies on an s6-overlay stage2 hook to remap to uid 10000 at boot. `docker run --entrypoint sh` lands you at `uid=0(root)`. Our compose must use the real entrypoint, or pass `--user` explicitly — and any debugging shell we open is more privileged than the running agent, which is worth remembering before concluding "the sandbox lets me do X".
