@@ -14,7 +14,15 @@ import (
 	"github.com/satishthakur/chhaya/internal/policy"
 )
 
+// stateVersion is written by every flush and required by every Open. It is
+// what makes "unreadable means stopped" true across the whole input space
+// rather than only for syntax errors: a file holding `null` or `{}` parses
+// without error but carries no state, and accepting either would silently
+// turn the kill switch off.
+const stateVersion = 1
+
 type persisted struct {
+	V           int              `json:"v"`
 	KillSwitch  bool             `json:"kill_switch"`
 	KilledAt    time.Time        `json:"killed_at"`
 	Tainted     bool             `json:"tainted"`
@@ -44,9 +52,20 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read state: %w", err)
 	}
-	if err := json.Unmarshal(b, &s.p); err != nil {
+	// Decode into a pointer, not a value: json.Unmarshal of the literal `null`
+	// into a value target succeeds and leaves it untouched, so a file corrupted
+	// down to four bytes would read as "not stopped".
+	var p *persisted
+	if err := json.Unmarshal(b, &p); err != nil {
 		return nil, fmt.Errorf("state file at %s is unreadable, so we cannot tell whether we are stopped: %w", path, err)
 	}
+	if p == nil {
+		return nil, fmt.Errorf("state file at %s holds JSON null, not state; delete it deliberately if you mean to start clean", path)
+	}
+	if p.V != stateVersion {
+		return nil, fmt.Errorf("state file at %s has version %d, want %d; refusing to guess what it means", path, p.V, stateVersion)
+	}
+	s.p = *p
 	if s.p.Spent == nil {
 		s.p.Spent = map[string]int64{}
 	}
@@ -125,18 +144,34 @@ func (s *Store) update(f func(*persisted)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f(&s.p)
+	s.p.V = stateVersion
 	return s.flush()
 }
 
-// flush writes atomically: a half-written state file would be an unreadable
-// one, and an unreadable one stops the gateway.
+// flush writes atomically and durably. Both halves matter: a half-written
+// state file is an unreadable one, and an unreadable one stops the gateway.
+// os.WriteFile would only reach the page cache, so a crash just after the
+// rename could leave the target present with stale bytes — the exact failure
+// the temp-file dance is supposed to prevent. Hence the explicit Sync.
 func (s *Store) flush() error {
 	b, err := json.Marshal(s.p)
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	tmp := s.path + ".tmp" // same directory, so Rename never crosses a filesystem
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, s.path); err != nil {

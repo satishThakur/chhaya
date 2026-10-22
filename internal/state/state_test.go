@@ -58,6 +58,31 @@ func TestCorruptFileRefusesToOpen(t *testing.T) {
 	}
 }
 
+// TestFileThatParsesButHoldsNoStateRefusesToOpen covers the inputs that are
+// valid JSON and therefore slip past a syntax check. `null` is the dangerous
+// one: unmarshalled into a value target it succeeds and leaves the target
+// zeroed, which reads as "not stopped".
+func TestFileThatParsesButHoldsNoStateRefusesToOpen(t *testing.T) {
+	for name, body := range map[string]string{
+		"json null":        "null",
+		"null with spaces": "  null \n",
+		"empty object":     "{}",
+		"wrong shape":      "[]",
+		"empty file":       "",
+		"unknown version":  `{"v":99,"kill_switch":true}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := tmp(t)
+			if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Open(p); err == nil {
+				t.Fatalf("%q was accepted; a file we cannot read as state must stop the gateway", body)
+			}
+		})
+	}
+}
+
 func TestTaintRoundTrips(t *testing.T) {
 	p := tmp(t)
 	s, _ := Open(p)
