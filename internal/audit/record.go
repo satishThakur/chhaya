@@ -3,6 +3,7 @@
 package audit
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -47,13 +48,40 @@ type Result struct {
 	Error  string `json:"error,omitempty"`
 }
 
+// canonicalJSON is the ONE encoding mode this package uses — for hashing, for
+// writing, and for verifying. It must be one mode: json.Marshal HTML-escapes
+// `<`, `>` and `&`, so mixing it with an unescaped writer would hash different
+// bytes than it writes, and the redaction marker `<redacted:NB>` contains two
+// of those three characters.
+func canonicalJSON(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil // Encode appends a newline
+}
+
+// MarshalArgs is the supported way to build Record.Args. Use it rather than
+// json.Marshal so that the bytes written are the bytes hashed. It cannot fail
+// usefully from a caller's point of view, so an unserialisable value becomes a
+// sentinel rather than an error nobody can act on.
+func MarshalArgs(v any) json.RawMessage {
+	b, err := canonicalJSON(v)
+	if err != nil {
+		return json.RawMessage(`{"_":"args were not serialisable"}`)
+	}
+	return b
+}
+
 // computeHash implements the spec's sha256(canonical_json(record_without_hash) ‖ prev).
 // "Without hash" is realised by zeroing the field rather than editing the
 // serialised bytes: equally deterministic, and no string surgery to get wrong.
 func (r Record) computeHash() (string, error) {
 	c := r
 	c.Hash = ""
-	b, err := json.Marshal(c)
+	b, err := canonicalJSON(c)
 	if err != nil {
 		return "", err
 	}

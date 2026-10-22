@@ -1,7 +1,6 @@
 package audit
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -67,27 +66,9 @@ func (w *Writer) Append(r Record) (Record, error) {
 	}
 	r.Hash = h
 
-	// Before writing, unescape HTML in the Args to preserve literal characters
-	// in the audit log. This ensures that redaction markers are preserved
-	// byte-for-byte through the hash chain.
-	if len(r.Args) > 0 {
-		argsBytes := []byte(r.Args)
-		// Unescape HTML entities that json.Marshal may have added
-		argsBytes = bytes.ReplaceAll(argsBytes, []byte("\\u003c"), []byte("<"))
-		argsBytes = bytes.ReplaceAll(argsBytes, []byte("\\u003e"), []byte(">"))
-		argsBytes = bytes.ReplaceAll(argsBytes, []byte("\\u0026"), []byte("&"))
-		r.Args = json.RawMessage(argsBytes)
-	}
-
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(r); err != nil {
+	line, err := canonicalJSON(r)
+	if err != nil {
 		return Record{}, err
-	}
-	line := buf.Bytes()
-	if len(line) > 0 && line[len(line)-1] == '\n' {
-		line = line[:len(line)-1]
 	}
 	if _, err := w.f.Write(append(line, '\n')); err != nil {
 		return Record{}, err

@@ -23,11 +23,7 @@ func rec(tool string) Record {
 }
 
 func mustRaw(v any) json.RawMessage {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(err)
-	}
-	return b
+	return MarshalArgs(v)
 }
 
 func TestAppendBuildsAChainThatVerifies(t *testing.T) {
@@ -192,9 +188,9 @@ func TestRedactionHappensBeforeHashing(t *testing.T) {
 
 func TestRedactScrubsSecretishKeysWithoutBeingAsked(t *testing.T) {
 	out := Redact(map[string]any{
-		"bot_token":     "abc123",
-		"nested":        map[string]any{"api_key": "def456", "path": "ok"},
-		"harmless":      "visible",
+		"bot_token": "abc123",
+		"nested":    map[string]any{"api_key": "def456", "path": "ok"},
+		"harmless":  "visible",
 	}, nil)
 
 	b, _ := json.Marshal(out)
@@ -206,6 +202,27 @@ func TestRedactScrubsSecretishKeysWithoutBeingAsked(t *testing.T) {
 	}
 	if !strings.Contains(s, "visible") || !strings.Contains(s, "ok") {
 		t.Errorf("default redaction was too greedy: %s", s)
+	}
+}
+
+// TestARedactedRecordStillVerifies closes the gap between "the secret is not in
+// the file" and "the chain is still intact". The redaction marker contains the
+// two characters json.Marshal would escape, so this is exactly the record most
+// likely to break round-trip fidelity.
+func TestARedactedRecordStillVerifies(t *testing.T) {
+	p := tmpLog(t)
+	w, _ := Open(p)
+	r := rec("memory.propose_update")
+	r.Args = mustRaw(Redact(map[string]any{
+		"path": "taste/food", "diff": "secret diff body",
+	}, []string{"diff"}))
+	if _, err := w.Append(r); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+
+	if _, err := Verify(p); err != nil {
+		t.Fatalf("a redacted record broke the chain: %v", err)
 	}
 }
 

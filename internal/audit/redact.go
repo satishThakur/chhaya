@@ -6,25 +6,6 @@ import (
 	"strings"
 )
 
-// unescaped is a string wrapper that marshals to JSON without HTML escaping.
-// This ensures that redaction markers like "<redacted:35B>" are preserved
-// byte-for-byte through JSON encoding.
-type unescaped string
-
-func (u unescaped) MarshalJSON() ([]byte, error) {
-	// Use json.Marshal to get proper escaping, then unescape HTML entities.
-	b, err := json.Marshal(string(u))
-	if err != nil {
-		return nil, err
-	}
-	// Unescape the HTML entities that json.Marshal adds
-	s := string(b)
-	s = strings.ReplaceAll(s, "\\u003c", "<")
-	s = strings.ReplaceAll(s, "\\u003e", ">")
-	s = strings.ReplaceAll(s, "\\u0026", "&")
-	return []byte(s), nil
-}
-
 // secretish names whose values are never logged, whatever the policy said.
 // CLAUDE.md requires the logger to redact by default; this is that default.
 // It is deliberately a suffix/substring match rather than an exact list,
@@ -82,12 +63,12 @@ func redactSecretish(m map[string]any) {
 
 // marker records the size of what was removed, so the log still shows that
 // something substantial was there without showing what.
-func marker(v any) any {
+func marker(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {
-		return unescaped("<redacted>")
+		return "<redacted>"
 	}
-	return unescaped(fmt.Sprintf("<redacted:%dB>", len(b)))
+	return fmt.Sprintf("<redacted:%dB>", len(b))
 }
 
 func deepCopyMap(m map[string]any) map[string]any {
