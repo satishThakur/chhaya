@@ -8,4 +8,4 @@ build:
 	go build -o bin/chhayactl ./cmd/chhayactl
 
 evals:
-	go test ./internal/policy/... -run 'TestDecide' -v
+	go test ./internal/policy/... -v

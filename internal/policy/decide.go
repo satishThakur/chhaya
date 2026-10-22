@@ -55,8 +55,8 @@ func Decide(req Request, st State, cfg Config, now time.Time) Decision {
 	case TierMoney:
 		d.Outcome, d.RuleID, d.Reason = NeedApproval, "tier2.approval", "approval required: this spends money or sends data outside"
 	default:
-		// Unreachable given the check above, but an unrecognised tier must not
-		// fall through to Allow.
+		// Catches any tier the gateway does not recognise. Denying is the
+		// fail-closed answer.
 		return deny(d, "tier.unknown", fmt.Sprintf("blocked: tier %d is not a tier this gateway knows", req.Tier))
 	}
 
@@ -66,17 +66,17 @@ func Decide(req Request, st State, cfg Config, now time.Time) Decision {
 
 func withCaps(d Decision, req Request, st State, cfg Config) Decision {
 	if req.CapKey != "" {
-		cap, ok := cfg.Caps[req.CapKey]
+		limit, ok := cfg.Caps[req.CapKey]
 		if !ok {
 			return deny(d, "cap.unknown",
 				fmt.Sprintf("blocked: no spending cap is configured for %q, which reads as zero", req.CapKey))
 		}
-		if req.AmountMinor > cap.PerOrderMinor {
+		if req.AmountMinor > limit.PerOrderMinor {
 			return deny(d, "cap."+req.CapKey+".per_order",
-				fmt.Sprintf("blocked: %s is over the per-order cap of %s", rupees(req.AmountMinor), rupees(cap.PerOrderMinor)))
+				fmt.Sprintf("blocked: %s is over the per-order cap of %s", rupees(req.AmountMinor), rupees(limit.PerOrderMinor)))
 		}
-		if st.Spent[req.CapKey]+req.AmountMinor > cap.PerDayMinor {
-			left := cap.PerDayMinor - st.Spent[req.CapKey]
+		if st.Spent[req.CapKey]+req.AmountMinor > limit.PerDayMinor {
+			left := limit.PerDayMinor - st.Spent[req.CapKey]
 			if left < 0 {
 				left = 0
 			}

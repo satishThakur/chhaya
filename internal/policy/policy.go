@@ -1,6 +1,8 @@
 // Package policy decides whether a tool call is allowed. It is pure: no I/O,
-// no ambient clock, no network. The clock is injected because caps need it.
-// Every safety property is therefore a table test with no mocks.
+// no ambient clock, no network. The clock is a parameter rather than an ambient
+// call so that Decide stays pure and every safety property is reproducible in
+// a table test; no rule reads it yet. Every safety property is therefore a table
+// test with no mocks.
 package policy
 
 import "time"
