@@ -118,10 +118,10 @@ build:
 	go build -o bin/chhayactl ./cmd/chhayactl
 
 evals:
-	go test ./internal/policy/... -run 'TestDecide' -v
+	go test ./internal/policy/... -v
 ```
 
-`evals` points at the policy tests on purpose: spec §8 says those table tests *are* the L1 safety evals, not a separate artefact.
+`evals` points at the policy package on purpose: spec §8 says those tests *are* the L1 safety evals, not a separate artefact. Run the whole package, with no `-run` filter — `-run 'TestDecide'` is an unanchored substring match and would silently skip the four property tests whose names do not contain it, which are exactly the invariants §8 names.
 
 - [ ] **Step 2: Write the types**
 
@@ -866,7 +866,11 @@ func Load(path string) (policy.Config, string, error) {
 		DefaultRatePerHour: rate,
 		ApprovalTimeout:    time.Duration(timeout) * time.Second,
 		BranchPrefix:       *f.Allowlists.BranchPrefix,
-		Repos:              f.Allowlists.Repos, // nil is correct: no repo is writable
+		// Empty means no repository is writable, which is the safe default.
+		// Do not normalise to nil: yaml.v3 decodes an explicit `repos: []` to a
+		// non-nil zero-length slice and only an omitted key to nil, and every
+		// consumer tests len(), so the representation is not the invariant.
+		Repos: f.Allowlists.Repos,
 	}, hash, nil
 }
 
@@ -953,13 +957,7 @@ func rec(tool string) Record {
 	}
 }
 
-func mustRaw(v any) json.RawMessage {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(err)
-	}
-	return b
-}
+func mustRaw(v any) json.RawMessage { return MarshalArgs(v) }
 
 func TestAppendBuildsAChainThatVerifies(t *testing.T) {
 	p := tmpLog(t)
@@ -1121,6 +1119,27 @@ func TestRedactionHappensBeforeHashing(t *testing.T) {
 	}
 }
 
+// TestARedactedRecordStillVerifies closes the gap between "the secret is not in
+// the file" and "the chain is still intact". The redaction marker contains the
+// two characters json.Marshal would escape, so this is exactly the record most
+// likely to break round-trip fidelity.
+func TestARedactedRecordStillVerifies(t *testing.T) {
+	p := tmpLog(t)
+	w, _ := Open(p)
+	r := rec("memory.propose_update")
+	r.Args = mustRaw(Redact(map[string]any{
+		"path": "taste/food", "diff": "secret diff body",
+	}, []string{"diff"}))
+	if _, err := w.Append(r); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+
+	if _, err := Verify(p); err != nil {
+		t.Fatalf("a redacted record broke the chain: %v", err)
+	}
+}
+
 func TestRedactScrubsSecretishKeysWithoutBeingAsked(t *testing.T) {
 	out := Redact(map[string]any{
 		"bot_token":     "abc123",
@@ -1165,6 +1184,7 @@ Create `internal/audit/record.go`:
 package audit
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -1209,13 +1229,40 @@ type Result struct {
 	Error  string `json:"error,omitempty"`
 }
 
+// canonicalJSON is the ONE encoding mode this package uses — for hashing, for
+// writing, and for verifying. It must be one mode: json.Marshal HTML-escapes
+// `<`, `>` and `&`, so mixing it with an unescaped writer would hash different
+// bytes than it writes, and the redaction marker `<redacted:NB>` contains two
+// of those three characters.
+func canonicalJSON(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil // Encode appends a newline
+}
+
+// MarshalArgs is the supported way to build Record.Args. Use it rather than
+// json.Marshal so that the bytes written are the bytes hashed. It cannot fail
+// usefully from a caller's point of view, so an unserialisable value becomes a
+// sentinel rather than an error nobody can act on.
+func MarshalArgs(v any) json.RawMessage {
+	b, err := canonicalJSON(v)
+	if err != nil {
+		return json.RawMessage(`{"_":"args were not serialisable"}`)
+	}
+	return b
+}
+
 // computeHash implements the spec's sha256(canonical_json(record_without_hash) ‖ prev).
 // "Without hash" is realised by zeroing the field rather than editing the
 // serialised bytes: equally deterministic, and no string surgery to get wrong.
 func (r Record) computeHash() (string, error) {
 	c := r
 	c.Hash = ""
-	b, err := json.Marshal(c)
+	b, err := canonicalJSON(c)
 	if err != nil {
 		return "", err
 	}
@@ -1394,7 +1441,7 @@ func (w *Writer) Append(r Record) (Record, error) {
 	}
 	r.Hash = h
 
-	line, err := json.Marshal(r)
+	line, err := canonicalJSON(r) // same bytes the hash was taken over
 	if err != nil {
 		return Record{}, err
 	}
@@ -1606,6 +1653,31 @@ func TestCorruptFileRefusesToOpen(t *testing.T) {
 	}
 }
 
+// TestFileThatParsesButHoldsNoStateRefusesToOpen covers the inputs that are
+// valid JSON and therefore slip past a syntax check. `null` is the dangerous
+// one: unmarshalled into a value target it succeeds and leaves the target
+// zeroed, which reads as "not stopped".
+func TestFileThatParsesButHoldsNoStateRefusesToOpen(t *testing.T) {
+	for name, body := range map[string]string{
+		"json null":        "null",
+		"null with spaces": "  null \n",
+		"empty object":     "{}",
+		"wrong shape":      "[]",
+		"empty file":       "",
+		"unknown version":  `{"v":99,"kill_switch":true}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := tmp(t)
+			if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Open(p); err == nil {
+				t.Fatalf("%q was accepted; a file we cannot read as state must stop the gateway", body)
+			}
+		})
+	}
+}
+
 func TestTaintRoundTrips(t *testing.T) {
 	p := tmp(t)
 	s, _ := Open(p)
@@ -1676,7 +1748,15 @@ import (
 	"github.com/satishthakur/chhaya/internal/policy"
 )
 
+// stateVersion is written by every flush and required by every Open. It is
+// what makes "unreadable means stopped" true across the whole input space
+// rather than only for syntax errors: a file holding `null` or `{}` parses
+// without error but carries no state, and accepting either would silently
+// turn the kill switch off.
+const stateVersion = 1
+
 type persisted struct {
+	V           int              `json:"v"`
 	KillSwitch  bool             `json:"kill_switch"`
 	KilledAt    time.Time        `json:"killed_at"`
 	Tainted     bool             `json:"tainted"`
@@ -1706,9 +1786,20 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read state: %w", err)
 	}
-	if err := json.Unmarshal(b, &s.p); err != nil {
+	// Decode into a pointer, not a value: json.Unmarshal of the literal `null`
+	// into a value target succeeds and leaves it untouched, so a file corrupted
+	// down to four bytes would read as "not stopped".
+	var p *persisted
+	if err := json.Unmarshal(b, &p); err != nil {
 		return nil, fmt.Errorf("state file at %s is unreadable, so we cannot tell whether we are stopped: %w", path, err)
 	}
+	if p == nil {
+		return nil, fmt.Errorf("state file at %s holds JSON null, not state; delete it deliberately if you mean to start clean", path)
+	}
+	if p.V != stateVersion {
+		return nil, fmt.Errorf("state file at %s has version %d, want %d; refusing to guess what it means", path, p.V, stateVersion)
+	}
+	s.p = *p
 	if s.p.Spent == nil {
 		s.p.Spent = map[string]int64{}
 	}
@@ -1787,18 +1878,34 @@ func (s *Store) update(f func(*persisted)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f(&s.p)
+	s.p.V = stateVersion
 	return s.flush()
 }
 
-// flush writes atomically: a half-written state file would be an unreadable
-// one, and an unreadable one stops the gateway.
+// flush writes atomically and durably. Both halves matter: a half-written
+// state file is an unreadable one, and an unreadable one stops the gateway.
+// os.WriteFile would only reach the page cache, so a crash just after the
+// rename could leave the target present with stale bytes — the exact failure
+// the temp-file dance is supposed to prevent. Hence the explicit Sync.
 func (s *Store) flush() error {
 	b, err := json.Marshal(s.p)
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	tmp := s.path + ".tmp" // same directory, so Rename never crosses a filesystem
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
@@ -2324,7 +2431,10 @@ func New(cfg policy.Config, st *state.Store, w *audit.Writer, ap Approver, regs 
 	if ap == nil {
 		return nil, errors.New("no approver: a gateway that cannot ask cannot approve")
 	}
-	return &Gateway{cfg: cfg, state: st, audit: w, approver: ap, tools: reg, now: time.Now}, nil
+	return &Gateway{
+		cfg: cfg, state: st, audit: w, auditPath: w.Path(),
+		approver: ap, tools: reg, now: time.Now,
+	}, nil
 }
 
 // Registrations returns tool metadata with handlers stripped. capabilities()
@@ -2430,10 +2540,9 @@ func (g *Gateway) refuse(call ToolCall, reg Registration, st policy.State, d pol
 func (g *Gateway) record(call ToolCall, reg Registration, st policy.State, d policy.Decision,
 	decision string, ap *audit.Approval, res audit.Result, start time.Time, severity string) {
 
-	args, err := json.Marshal(audit.Redact(call.Args, append(reg.Redact, d.Redact...)))
-	if err != nil {
-		args = json.RawMessage(`{"_":"args were not serialisable"}`)
-	}
+	// MarshalArgs, not json.Marshal: the audit package owns its encoding mode
+	// so that the bytes written are the bytes hashed.
+	args := audit.MarshalArgs(audit.Redact(call.Args, append(reg.Redact, d.Redact...)))
 
 	r := audit.Record{
 		Actor: orDefault(call.Actor, "unknown"), Tool: call.Name,
@@ -2478,7 +2587,7 @@ In `New`, the gateway needs to know where the log lives. Change the `audit.Write
 func (w *Writer) Path() string { return w.f.Name() }
 ```
 
-and in `mcpsrv.New`, set `auditPath: w.Path()`.
+`New` already sets `auditPath: w.Path()` from this.
 
 - [ ] **Step 7: Run to verify they pass**
 
@@ -3689,7 +3798,7 @@ func (b *Bot) card(call mcpsrv.ToolCall, d policy.Decision) string {
 }
 
 func (b *Bot) auditRejectedSender(senderID int64, kind, payload string) {
-	args, _ := json.Marshal(map[string]any{"sender_id": senderID, "update_kind": kind, "payload": truncate(payload, 120)})
+	args := audit.MarshalArgs(map[string]any{"sender_id": senderID, "update_kind": kind, "payload": truncate(payload, 120)})
 	b.appendRecord(audit.Record{
 		Actor: "unknown", Tool: "approver." + kind, Kind: "write", Args: args,
 		Decision: "deny", Rule: "approver.unauthorized_sender",
