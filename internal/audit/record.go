@@ -1,0 +1,68 @@
+// Package audit writes a hash-chained, append-only log. Tamper-evidence is the
+// point: anyone with the file can tell whether it has been edited, including us.
+package audit
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"time"
+)
+
+// Record is one line of the log. Field order here is the serialised order, and
+// the serialised bytes are what gets hashed, so reordering fields invalidates
+// every existing chain. Don't, without a migration.
+type Record struct {
+	Seq        uint64          `json:"seq"`
+	TS         string          `json:"ts"`   // RFC3339Nano, UTC; a string so it round-trips byte for byte
+	Prev       *string         `json:"prev"` // null on the genesis record
+	Actor      string          `json:"actor"`
+	Tool       string          `json:"tool"`
+	Kind       string          `json:"kind"`
+	Tier       int             `json:"tier"`
+	Args       json.RawMessage `json:"args"`
+	Decision   string          `json:"decision"`
+	Rule       string          `json:"rule"`
+	Reason     string          `json:"reason"`
+	Taint      Taint           `json:"taint"`
+	Approval   *Approval       `json:"approval"`
+	Result     Result          `json:"result"`
+	DurationMS int64           `json:"duration_ms"`
+	Severity   string          `json:"severity,omitempty"` // "critical" when the safety channel itself failed
+	Hash       string          `json:"hash"`
+}
+
+type Taint struct {
+	Tainted bool   `json:"tainted"`
+	Source  string `json:"source,omitempty"`
+}
+
+type Approval struct {
+	Answer    string `json:"answer"` // approved | denied_by_user | timeout
+	LatencyMS int64  `json:"latency_ms"`
+}
+
+type Result struct {
+	Status string `json:"status"` // ok | refused | error
+	Error  string `json:"error,omitempty"`
+}
+
+// computeHash implements the spec's sha256(canonical_json(record_without_hash) ‖ prev).
+// "Without hash" is realised by zeroing the field rather than editing the
+// serialised bytes: equally deterministic, and no string surgery to get wrong.
+func (r Record) computeHash() (string, error) {
+	c := r
+	c.Hash = ""
+	b, err := json.Marshal(c)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	h.Write(b)
+	if r.Prev != nil {
+		h.Write([]byte(*r.Prev))
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func nowStamp() string { return time.Now().UTC().Format(time.RFC3339Nano) }
