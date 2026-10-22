@@ -1,0 +1,19 @@
+# Values only. Every rule lives in internal/policy. If you are tempted to add
+# a condition here, the condition belongs in Go and this file holds its number.
+#
+# A missing or unparseable value resolves to the most restrictive reading:
+# a missing cap is zero, not infinity. A typo can only tighten the boundary.
+
+caps:
+  food:
+    per_order_inr: 800
+    per_day_inr: 1500
+  rate_limits:
+    default_per_hour: 60
+
+allowlists:
+  repos: []          # filled at M2; empty means no repo is writable
+  branch_prefix: "agent/"
+
+approvals:
+  timeout_seconds: 300
