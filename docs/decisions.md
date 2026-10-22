@@ -251,3 +251,19 @@ Worth keeping as a rule for the eval suite we are about to write: **assert on be
 **Consequence worth remembering.** A capability that exists only as a Python library does not get linked into anything we write; it gets its own process behind a gateway tool. This already bites the Garmin open question — the usable unofficial clients are Python, so "start unofficial" means a separate sync process, not an import. That cost belongs in the M1 decision, not discovered during it.
 
 **What would reopen it.** Nothing short of changing the stack decision itself. Scala was the other candidate and was not chosen.
+
+---
+
+## 2026-10-22 — Garmin starts unofficial, as a Python sidecar; M1 ports `health-assistant`
+
+**Decision.** M1 reads Garmin through the unofficial route (`garminconnect`/`garth`) running as a **separate Python sidecar process** that posts into a Go store the gateway reads. We do not wait for the official developer program, and we do not link a Python library into anything we write. This closes the open question in `design.md` that was marked **Blocks M1**.
+
+**Why now.** We already own working code for this: `~/codebase/health-assistant` has run exactly this architecture since January 2026 — Python sidecar → HTTP → Go validate/transform/store. The question was never "is the unofficial route viable", it was "what does it cost us". The answer is a second process and a scraper that can break, both of which we had already accepted in the risk table ("Unofficial Garmin access breaks → sync into our own store; coach degrades gracefully on stale data").
+
+**What this buys.** About 750 lines of Go and 350 of Python we don't write: the six-data-type field mappings, the normalised structs, the validators with their tests, the payload→event transforms, three correlation functions that are the content of the daily nudge, and a sync-audit record that maps field-for-field onto the L0 ops eval. The inventory, with what to leave and what not to carry over, is in `docs/m1-garmin-reuse.md`.
+
+**What we deliberately don't take.** TimescaleDB (SQLite for one user), the `user_id` plumbing (single user), JWT/Google Sign-In and the dashboard REST layer (no app, no second user, mTLS instead).
+
+**One finding worth keeping.** The sync in that repo has been failing since 2026-02-18: an ingest-secret middleware was added to the six Garmin routes and the Python client was never updated to send the header, so every POST 401s. It went unnoticed for eight months because nothing tested the real boundary. **For chhaya: the sidecar's authentication to the gateway needs a test that crosses the process boundary, not a handler test.** The same gap would be invisible in unit tests here too.
+
+**Reopen if:** Garmin's web endpoints change in a way garth can't track, or the official program becomes available without a commercial agreement. Either way the sidecar is the thing that changes; the store, the tools and the coach logic don't.

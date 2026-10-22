@@ -493,7 +493,7 @@ Two general personal agents launched weeks before this design and neither is in 
 **Open questions**
 
 - [ ] Which model for the orchestrator, and do I want a cheaper one for background review? (Hermes has `auxiliary.background_review` with its own model route, so this is a config choice, not a build.)
-- [ ] Garmin: official developer program, or the unofficial library to start? The usable unofficial clients are Python, so "start unofficial" means standing up a separate sync process rather than importing a package into the gateway. **Blocks M1.**
+- [x] ~~Garmin: official developer program or the unofficial library to start?~~ **Settled 2026-10-22: unofficial, as a Python sidecar.** We already run this architecture in `~/codebase/health-assistant`; M1 ports it. See `docs/m1-garmin-reuse.md` and the decisions entry. No longer blocks M1.
 - [ ] Does Swiggy's partner agreement permit a personal, single-user agent at all, and what is the onboarding lead time? **Blocks M3.**
 - [ ] On AWS, does Claude Code run on the instance against a clone, or stay on the laptop?
 - [ ] Is a live "watch it work" view worth building for the code worker, or is streaming progress plus an abort button enough?
