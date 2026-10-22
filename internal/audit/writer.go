@@ -83,6 +83,10 @@ func (w *Writer) Append(r Record) (Record, error) {
 	return r, nil
 }
 
+// Path reports the file this writer appends to. chhayactl and the tests read
+// the log independently of the writer; this is how they find it.
+func (w *Writer) Path() string { return w.f.Name() }
+
 func (w *Writer) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
