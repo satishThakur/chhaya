@@ -86,7 +86,11 @@ func Load(path string) (policy.Config, string, error) {
 		DefaultRatePerHour: rate,
 		ApprovalTimeout:    time.Duration(timeout) * time.Second,
 		BranchPrefix:       *f.Allowlists.BranchPrefix,
-		Repos:              f.Allowlists.Repos, // nil is correct: no repo is writable
+		// Empty means no repository is writable, which is the safe default.
+		// Do not normalise to nil: yaml.v3 decodes an explicit `repos: []` to a
+		// non-nil zero-length slice and only an omitted key to nil, and every
+		// consumer tests len(), so the representation is not the invariant.
+		Repos: f.Allowlists.Repos,
 	}, hash, nil
 }
 

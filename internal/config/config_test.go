@@ -95,3 +95,24 @@ func TestPolicyHashChangesWithContent(t *testing.T) {
 		t.Errorf("hash should be hex sha256, got %d chars", len(h1))
 	}
 }
+
+func TestNoRepoIsWritableWhicheverWayTheKeyIsWritten(t *testing.T) {
+	// Both shapes must mean the same thing: nothing is writable. The
+	// representation differs (yaml.v3 gives a non-nil empty slice for the
+	// explicit form and nil for the omitted one) and that difference must
+	// not matter to anyone.
+	explicit := good
+	omitted := strings.Replace(good, "  repos: []\n", "", 1)
+
+	for name, body := range map[string]string{"explicit empty": explicit, "key omitted": omitted} {
+		t.Run(name, func(t *testing.T) {
+			cfg, _, err := Load(write(t, body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(cfg.Repos) != 0 {
+				t.Fatalf("Repos = %v, want nothing writable", cfg.Repos)
+			}
+		})
+	}
+}
