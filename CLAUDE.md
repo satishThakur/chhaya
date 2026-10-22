@@ -12,16 +12,19 @@ The gateway is the security boundary, and it is outside the agent on purpose. He
 
 ## Non-negotiables
 
-- **Every tool is registered with a tier, a validator and an audit entry.** No tool bypasses `policy/`. A tool with no tier is a bug, not a default.
-- **Policy is code plus `config/policy.yaml` — never prompt text.** A limit stated only in a tool description is not enforced. Tool descriptions may *describe* limits so the agent plans well; `policy/` is what holds them.
-- **Changes to `policy/` need tests that prove a blocked case stays blocked.** Write the failing test first. A policy change with only happy-path tests does not land.
+- **Every tool is registered with a tier, a validator and an audit entry.** No tool bypasses `internal/policy/`. A tool with no tier is a bug, not a default.
+- **Policy is code plus `config/policy.yaml` — never prompt text.** A limit stated only in a tool description is not enforced. Tool descriptions may *describe* limits so the agent plans well; `internal/policy/` is what holds them.
+- **Changes to `internal/policy/` need tests that prove a blocked case stays blocked.** Write the failing test first. A policy change with only happy-path tests does not land.
 - **Secrets come from env only.** Never log them. The audit logger redacts by default — don't add a path around it.
 - **Never edit files under `memory/` directly.** It changes only through `memory.propose_update` flows, and every entry records its provenance.
 - **Fail closed.** If the gateway cannot determine a tier, read its own policy state, or reach the approver, it refuses the write.
 
 ## Stack and workflow
 
-- Python 3.11+, `uv`, `pytest`, type hints, small focused modules.
+- Go 1.24+, standard `go test`, small focused packages. Everything we write is Go.
+- Hermes is the only Python in the system. We run it as a pinned container and never import it, so its
+  language is not ours. A dependency that only exists as a Python library (the unofficial Garmin clients,
+  for example) gets its own process behind a gateway tool — it does not get linked into anything we write.
 - `make test` and `make evals` must pass before saying done. Run them; don't predict them.
 - Hermes is **pinned to a release tag** and upgraded deliberately after reading the changelog. Never track `main`. (v0.22.1 shipped from the wrong commit — this is why.)
 - Branch for feature work. The agent's own worker is restricted to `agent/*` branches and never merges to `main`.
@@ -30,18 +33,22 @@ The gateway is the security boundary, and it is outside the agent on purpose. He
 ## Layout
 
 ```
-gateway/          MCP server Hermes talks to — the security boundary
-  policy/         classifier, tiers, caps, taint, kill switch
-  approvals/      chhaya-approver Telegram bot (and /stop)
-  audit/          append-only log
-  tools/          memory, swiggy, claude_worker, garmin
-sync/garmin/      scheduled pull into SQLite
-memory/           Personal memory (Markdown, git-tracked) — propose_update only
-hermes/           config.yaml template, SOUL.md, skills we author
+cmd/chhayad/        the gateway daemon — wiring only, no logic
+cmd/chhayactl/      operator CLI: audit verify, policy explain, stop
+internal/
+  policy/           classifier, tiers, caps, taint, kill switch — pure, no I/O
+  audit/            hash-chained append-only log, and its verifier
+  approval/         chhaya-approver Telegram bot (and /stop)
+  mcpsrv/           MCP over HTTPS+mTLS; the only path to a tool handler
+  tools/            memory, swiggy, claude_worker, garmin
+  config/           policy.yaml load and validate
+sync/garmin/        scheduled pull into SQLite
+memory/             Personal memory (Markdown, git-tracked) — propose_update only
+hermes/             config.yaml template, SOUL.md, skills we author
 config/policy.yaml  caps, allowlists, repo list
-evals/            L0 ops, L1 safety, L2 failure modes, L3 taste
-deploy/           docker-compose.yml now, AWS later
-docs/             design.md, decisions.md, diagrams/
+evals/              L0 ops, L1 safety, L2 failure modes, L3 taste
+deploy/             docker-compose.yml now, AWS later
+docs/               design.md, decisions.md, diagrams/
 ```
 
 ## Decisions that look like friction but are load-bearing

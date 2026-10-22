@@ -91,7 +91,7 @@ To Hermes, the gateway *is* the tool provider: an MCP server upstream and an MCP
 | Decision | Choice | Why |
 | --- | --- | --- |
 | Channel | Telegram only, no WhatsApp | Free bot API, polling works without a public webhook, native approve/deny buttons. Hermes' gateway already speaks it. |
-| Runtime | Adopt [Hermes Agent](https://github.com/NousResearch/hermes-agent) for the loop; don't build it | MIT, Python, model-agnostic. Gives us the agent loop, Telegram gateway, cron, session search and skills on day one. |
+| Runtime | Adopt [Hermes Agent](https://github.com/NousResearch/hermes-agent) for the loop; don't build it | MIT, Python, model-agnostic. Gives us the agent loop, Telegram gateway, cron, session search and skills on day one. It is the only Python in the system and we run it as a pinned container, never as a library — everything we write is Go. |
 | What we build | Policy gateway, Personal memory, evals | These are the moat and the safety boundary. They must survive a runtime swap. |
 | Where guardrails live | Outside the agent, in a separate gateway process | Hermes writes its own skills and memory. An agent that can edit itself must not be able to edit its own permissions. |
 | How Hermes reaches tools | Exactly one MCP server: our gateway, reached over HTTP with mTLS, never spawned as a subprocess | Hermes never holds Swiggy, GitHub or Garmin credentials. Every write goes through one choke point with one audit log. A standalone service also keeps its own lifecycle and kill switch out of Hermes' hands. |
@@ -264,16 +264,15 @@ chhaya/
   docs/design.md         # this doc, exported
   docs/decisions.md      # append-only log of choices and why
   docs/diagrams/         # rendered figures for this doc
-  gateway/               # MCP server Hermes talks to (Python, mcp SDK)
-    server.py            # tool registry, one entry point
-    policy/              # classifier, tiers, caps, taint, kill switch
-    approvals/           # chhaya-approver Telegram bot
-    audit/               # append-only log
-    tools/
-      memory.py          # Personal memory tools
-      swiggy.py          # client to Swiggy MCP, wrapped by policy
-      claude_worker.py   # runs claude -p in a worktree, returns PR link
-      garmin.py          # reads synced store only
+  cmd/chhayad/           # the gateway daemon — wiring only, no logic
+  cmd/chhayactl/         # operator CLI: audit verify, policy explain, stop
+  internal/
+    policy/              # classifier, tiers, caps, taint, kill switch (pure)
+    audit/               # hash-chained append-only log, and its verifier
+    approval/            # chhaya-approver Telegram bot
+    mcpsrv/              # MCP over HTTPS+mTLS; the only path to a tool handler
+    tools/               # memory, swiggy, claude_worker, garmin
+    config/              # policy.yaml load and validate
   sync/garmin/           # scheduled pull into SQLite
   memory/                # Personal memory (Markdown, git-tracked)
   hermes/                # config.yaml template, SOUL.md, skills we author
@@ -287,7 +286,8 @@ chhaya/
 - The gateway is the security boundary. Every new tool must be registered with a tier, a validator and an audit entry; no tool bypasses `policy/`.
 - Policy is code plus `policy.yaml`, never prompt text. Changes to `policy/` need tests that prove a blocked case stays blocked.
 - Secrets come from env only. Never log them; the audit logger redacts by default.
-- Python 3.11+, `uv`, `pytest`, type hints, small modules. Run `make test` and `make evals` before saying done.
+- Go 1.24+, standard `go test`, small focused packages. Everything we write is Go; Hermes is the only Python in the
+  system and it is an opaque dependency we run as a container. Run `make test` and `make evals` before saying done.
 - Never edit files under `memory/` except through `memory.propose_update` flows.
 
 **Working loop:** describe one milestone at a time to Claude Code, ask it to plan first, review the plan, then let it build with tests. Keep a short `docs/decisions.md` it appends to whenever we make a choice, so later sessions don't re-litigate.
@@ -493,7 +493,7 @@ Two general personal agents launched weeks before this design and neither is in 
 **Open questions**
 
 - [ ] Which model for the orchestrator, and do I want a cheaper one for background review? (Hermes has `auxiliary.background_review` with its own model route, so this is a config choice, not a build.)
-- [ ] Garmin: official developer program or the unofficial Python library to start? **Blocks M1.**
+- [ ] Garmin: official developer program, or the unofficial library to start? The usable unofficial clients are Python, so "start unofficial" means standing up a separate sync process rather than importing a package into the gateway. **Blocks M1.**
 - [ ] Does Swiggy's partner agreement permit a personal, single-user agent at all, and what is the onboarding lead time? **Blocks M3.**
 - [ ] On AWS, does Claude Code run on the instance against a clone, or stay on the laptop?
 - [ ] Is a live "watch it work" view worth building for the code worker, or is streaming progress plus an abort button enough?

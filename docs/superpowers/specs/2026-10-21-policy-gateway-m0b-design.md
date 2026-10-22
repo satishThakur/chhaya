@@ -257,8 +257,8 @@ A rule enforced in code beats a rule written in a comment — the project's thes
 
 ## 9. Documentation changes this requires
 
-- `CLAUDE.md` — the stack section says "Python 3.11+, `uv`, `pytest`". Replace with Go, and update the layout block.
-- `docs/design.md` — the repo-layout tree lists `.py` files; the Hermes bootstrap section should note the disabled web toolsets as architectural rather than incidental.
+- ~~`CLAUDE.md` — the stack section says "Python 3.11+, `uv`, `pytest`". Replace with Go, and update the layout block.~~ **Done 2026-10-22**, along with `.gitignore` (Go build artefacts replace the Python section).
+- `docs/design.md` — ~~the repo-layout tree lists `.py` files~~ (**done 2026-10-22**: Go tree, and the stack bullet, the Hermes row in Key choices and the Garmin open question now say explicitly that Hermes is the only Python and we never link a Python library into anything we write). Still to do: the Hermes bootstrap section should note the disabled web toolsets as architectural rather than incidental.
 - `scripts/verify-hermes-image.sh` — convert the source-inspection checks from `python3 -c inspect.getsource` to plain `grep` against files in the image. Python stays only where we must execute Hermes' own code (the import and affinity-stamping checks), which is probing a Python system rather than writing Python.
 
 ## 10. Deferred, with the trigger that reopens each

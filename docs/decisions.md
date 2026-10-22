@@ -241,3 +241,13 @@ All seven assumptions hold on both v0.22.2 and v0.22.3: stable interpreter (3.14
 Worth keeping as a rule for the eval suite we are about to write: **assert on behaviour or structure, never on wording.** A test that fails when a comment is rephrased trains you to ignore it, and a safety test you have learned to ignore is worse than no test.
 
 **New in 0.22.3, noted not adopted:** `terminal.client_env_passthrough` — "extra non-secret toolchain names a CLI/TUI client sends". A separate, narrower surface than `env_passthrough`, and explicitly non-secret, but it is a third way for variables to enter the sandbox. Leave unset; revisit if we ever run the TUI client.
+
+## 2026-10-22 — Go is the implementation language; Python exists only as Hermes
+
+**Decision.** Everything we write is Go. Hermes is the only Python in the system, and we run it as a pinned container, never as a library.
+
+**Why it needed writing down.** `design.md` and `CLAUDE.md` were drafted before this constraint and described a Python gateway (`gateway/server.py`, `tools/memory.py`, "Python 3.11+, `uv`, `pytest`"). The language choice is not cosmetic here: the bypass-proof invariant in the M0b spec depends on Go's unexported-identifier rule to make the tool registry unreachable except through `Invoke`. In Python that invariant would be a review convention rather than a compiler-enforced property.
+
+**Consequence worth remembering.** A capability that exists only as a Python library does not get linked into anything we write; it gets its own process behind a gateway tool. This already bites the Garmin open question — the usable unofficial clients are Python, so "start unofficial" means a separate sync process, not an import. That cost belongs in the M1 decision, not discovered during it.
+
+**What would reopen it.** Nothing short of changing the stack decision itself. Scala was the other candidate and was not chosen.

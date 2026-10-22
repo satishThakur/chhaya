@@ -21,17 +21,14 @@ audit/*.jsonl
 *.sqlite3
 hermes-data/
 
-# --- python ---
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-*.egg-info/
-dist/
-build/
+# --- go ---
+# Compiled binaries. `go build ./cmd/...` drops them in the repo root.
+/chhayad
+/chhayactl
+/bin/
+*.test
+*.out
+coverage.*
 
 # --- editors / os ---
 .DS_Store
