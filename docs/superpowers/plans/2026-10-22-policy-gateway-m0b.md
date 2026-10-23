@@ -1946,6 +1946,8 @@ a rename, because a half-written state file is an unreadable one."
 
 The structural heart of the design. After this task, there is exactly one exported way to reach a tool handler.
 
+> **Superseded in execution.** The reference code below was materially incomplete and the shipped implementation (commits `a02b178`, `a523068`, `95ada30`) differs in eight places. The largest: `dispatch` must set taint **before** invoking the handler, because an untrusted tool's *error string* is untrusted content too and the original ordering leaked it with the flag unset. Also changed: re-decide after an approval returns so `/stop` can interrupt a pending write; a deferred recover so a panicking handler cannot skip `audit.Append`; gateway-originated refusals recorded as `deny` with their own rule rather than `allow` with the policy's; `Redact`/`Schema` cloned on both ingress and egress; validators consulted whenever supplied; tier-2 registration rejected outright until caps are wired; a backstop timeout on the approver call. Read the code, not this section. The reasoning for each is in the SDD ledger.
+
 **Files:**
 - Create: `internal/mcpsrv/registry.go`
 - Create: `internal/mcpsrv/gateway.go`
