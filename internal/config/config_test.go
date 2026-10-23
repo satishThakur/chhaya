@@ -50,17 +50,53 @@ func TestLoadRejectsUnknownKeys(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsMissingSections(t *testing.T) {
-	cases := map[string]string{
-		"no caps":        "allowlists: {repos: [], branch_prefix: \"agent/\"}\napprovals: {timeout_seconds: 300}\n",
-		"no rate limit":  "caps:\n  food: {per_order_inr: 800, per_day_inr: 1500}\nallowlists: {repos: [], branch_prefix: \"agent/\"}\napprovals: {timeout_seconds: 300}\n",
-		"no timeout":     "caps:\n  food: {per_order_inr: 800, per_day_inr: 1500}\n  rate_limits: {default_per_hour: 60}\nallowlists: {repos: []}\napprovals: {timeout_seconds: 300}\n",
-		"no branch pfx":  "caps:\n  food: {per_order_inr: 800, per_day_inr: 1500}\n  rate_limits: {default_per_hour: 60}\nallowlists: {repos: []}\napprovals: {timeout_seconds: 300}\n",
+// without returns good with every line containing any of drop removed, and
+// fails if a drop matched nothing — a case built on a substring that has
+// since been renamed would otherwise test a file that is simply valid.
+func without(t *testing.T, drop ...string) string {
+	t.Helper()
+	lines := strings.Split(good, "\n")
+	for _, d := range drop {
+		var kept []string
+		var hit bool
+		for _, l := range lines {
+			if strings.Contains(l, d) {
+				hit = true
+				continue
+			}
+			kept = append(kept, l)
+		}
+		if !hit {
+			t.Fatalf("the sample config has no line containing %q; this case is not testing what it says", d)
+		}
+		lines = kept
 	}
-	for name, body := range cases {
+	return strings.Join(lines, "\n")
+}
+
+// TestLoadRejectsMissingSections omits exactly one required value per case
+// and checks the refusal names that value. Naming it matters: two of these
+// cases used to carry byte-identical bodies that both still had a timeout,
+// so "no timeout" passed on the missing branch prefix instead.
+func TestLoadRejectsMissingSections(t *testing.T) {
+	cases := map[string]struct {
+		drop  []string
+		names string
+	}{
+		"no caps at all":   {[]string{"caps:", "food:", "rate_limits"}, "caps.food.per_order_inr"},
+		"no food cap":      {[]string{"food:"}, "caps.food.per_order_inr"},
+		"no rate limit":    {[]string{"rate_limits"}, "caps.rate_limits.default_per_hour"},
+		"no timeout":       {[]string{"timeout_seconds"}, "approvals.timeout_seconds"},
+		"no branch prefix": {[]string{"branch_prefix"}, "allowlists.branch_prefix"},
+	}
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, _, err := Load(write(t, body)); err == nil {
+			_, _, err := Load(write(t, without(t, tc.drop...)))
+			if err == nil {
 				t.Fatal("a missing required value must refuse to load, not default to permissive")
+			}
+			if !strings.Contains(err.Error(), tc.names) {
+				t.Errorf("refused for the wrong reason: want %s named, got %v", tc.names, err)
 			}
 		})
 	}

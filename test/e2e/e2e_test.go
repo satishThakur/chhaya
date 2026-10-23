@@ -175,10 +175,14 @@ func invokeProposeUpdate(t *testing.T, dir string) mcpsrv.ToolResult {
 // TestClientWithoutACertificateIsRefused is the mTLS negative control. It is
 // the half of "mTLS works" that is easy to forget to assert: that the door is
 // actually locked, not just that your key opens it.
+//
+// Certs are required, not skipped-if-missing, for the same reason as in
+// TestBlockedWriteOverRealMTLS below: a skipped test reports green. The two
+// had opposite answers to the same precondition in the same file.
 func TestClientWithoutACertificateIsRefused(t *testing.T) {
 	certDir := "../../deploy/certs"
 	if _, err := os.Stat(filepath.Join(certDir, "ca.crt")); err != nil {
-		t.Skip("run deploy/gen-certs.sh first")
+		t.Fatal("certs are required for this test; run deploy/gen-certs.sh")
 	}
 	tlsCfg, err := mcpsrv.TLSConfig(
 		filepath.Join(certDir, "gateway.crt"),
