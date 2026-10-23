@@ -245,7 +245,7 @@ A rule enforced in code beats a rule written in a comment — the project's thes
 
 **`internal/policy` — table tests over the full decision order.** Every rule, every ordering interaction. Properties worth asserting directly: no input yields `Allow` for a write while the kill switch is on; no input yields `Allow` for a write while tainted; tier never comes from `Args`. These *are* the L1 safety evals from `design.md`; they are not a separate artefact.
 
-**`internal/audit`** — chain verifies on a clean log; mutating any past record fails verification; truncation fails verification; redaction happens before hashing (assert no secret appears in the hashed bytes).
+**`internal/audit`** — chain verifies on a clean log; mutating any past record fails verification; removing or reordering a record fails verification; a key injected into a record fails verification; redaction happens before hashing (assert no secret appears in the hashed bytes). Note what a bare hash chain does **not** catch: truncating the *tail* leaves an internally consistent shorter chain, so `Verify` reports it clean and `Open` resumes at the truncated sequence. Detecting that needs an anchor outside the file, which is deferred — see `docs/decisions.md`.
 
 **`internal/approval`** — fake Telegram transport. Timeout yields deny plus its own record. An unauthorised sender is ignored and audited. A failed send yields CRITICAL plus refusal.
 
