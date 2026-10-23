@@ -8,6 +8,12 @@ RUN CGO_ENABLED=0 go build -o /out/chhayad ./cmd/chhayad \
 
 FROM alpine:3.21
 RUN adduser -D -u 10001 chhaya
+# /data must exist in the image, owned by the uid the container runs as.
+# Docker seeds a new named volume from the image's directory — including its
+# ownership — but only if that directory is there. Without this, the volume is
+# created root:root 0755, audit.Open fails on O_CREATE as uid 10001, chhayad
+# log.Fatalf's, and `restart: unless-stopped` turns that into a crash loop.
+RUN mkdir -p /data && chown 10001:10001 /data
 COPY --from=build /out/chhayad /usr/local/bin/chhayad
 COPY --from=build /out/chhayactl /usr/local/bin/chhayactl
 USER chhaya
