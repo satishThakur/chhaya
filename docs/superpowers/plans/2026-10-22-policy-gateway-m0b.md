@@ -3920,6 +3920,8 @@ Create `internal/mcpsrv/server_test.go`:
 package mcpsrv
 
 import (
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -3965,22 +3967,11 @@ func TestCheckEnvironmentIsolation(t *testing.T) {
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("err = %v, wantErr = %v", err, tc.wantErr)
 			}
-			if tc.mentions != "" && err != nil && !contains(err.Error(), tc.mentions) {
+			if tc.mentions != "" && err != nil && !strings.Contains(err.Error(), tc.mentions) {
 				t.Errorf("error should name the variable: %v", err)
 			}
 		})
 	}
-}
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (func() bool {
-		for i := 0; i+len(sub) <= len(s); i++ {
-			if s[i:i+len(sub)] == sub {
-				return true
-			}
-		}
-		return false
-	})()
 }
 ```
 
@@ -4205,9 +4196,15 @@ func run() error {
 	memoryRoot := env("CHHAYA_MEMORY_ROOT", filepath.Join(dataDir, "memory"))
 	addr := env("CHHAYA_LISTEN", "0.0.0.0:8443")
 
-	// Step 0. The two bots' secrets must not have been crossed.
+	// Step 0. The two bots' secrets must not have been crossed. This runs
+	// before anything is read or created, so the one misconfiguration that
+	// would silently void the safety model still fails first and loudest.
 	if err := mcpsrv.CheckEnvironmentIsolation(os.Getenv); err != nil {
 		return err
+	}
+	// The audit log and the state file both live here and neither creates it.
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return fmt.Errorf("create data dir: %w", err)
 	}
 	chatID, err := strconv.ParseInt(strings.TrimSpace(os.Getenv("CHHAYA_APPROVER_ALLOWED_USERS")), 10, 64)
 	if err != nil {
