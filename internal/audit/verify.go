@@ -2,6 +2,7 @@ package audit
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -68,9 +69,19 @@ func readAll(path string) ([]Record, error) {
 		if len(line) == 0 {
 			continue
 		}
+		// DisallowUnknownFields, not json.Unmarshal: Unmarshal drops keys the
+		// struct does not declare, so a key injected into a record would be
+		// invisible to the hash walk and the chain would verify clean while
+		// the bytes on disk said something extra. The same decoder rejects a
+		// second JSON value smuggled onto the line after the record.
+		dec := json.NewDecoder(bytes.NewReader(line))
+		dec.DisallowUnknownFields()
 		var r Record
-		if err := json.Unmarshal(line, &r); err != nil {
-			return nil, fmt.Errorf("record %d is not valid JSON: %w", len(out)+1, err)
+		if err := dec.Decode(&r); err != nil {
+			return nil, fmt.Errorf("record %d is not a record this log wrote: %w", len(out)+1, err)
+		}
+		if dec.More() {
+			return nil, fmt.Errorf("record %d: the line carries more than one JSON value", len(out)+1)
 		}
 		out = append(out, r)
 	}

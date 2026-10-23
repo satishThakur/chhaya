@@ -1,5 +1,15 @@
-// Package audit writes a hash-chained, append-only log. Tamper-evidence is the
-// point: anyone with the file can tell whether it has been edited, including us.
+// Package audit writes a hash-chained, append-only log. Every record carries
+// the hash of the one before it, so anyone with the file can tell whether a
+// record it still contains was edited, removed or reordered — including us.
+//
+// Be precise about the limit, because the name "tamper-evident" invites a
+// stronger reading than the mechanism supports: a bare hash chain cannot
+// detect truncation of the tail. Dropping the last n records leaves a shorter
+// chain that is internally consistent, so Verify reports it clean and Open
+// resumes appending at the truncated sequence. Detecting that needs an anchor
+// outside the file — the last seq and hash held somewhere an attacker who can
+// write to the log does not also control. That anchor is deliberately
+// deferred; docs/decisions.md records the trigger that reopens it.
 package audit
 
 import (
@@ -74,6 +84,16 @@ func canonicalJSON(v any) ([]byte, error) {
 // json.Marshal so that the bytes written are the bytes hashed. It cannot fail
 // usefully from a caller's point of view, so an unserialisable value becomes a
 // sentinel rather than an error nobody can act on.
+//
+// It does NOT HTML-escape, and that is not an oversight to be tidied away:
+// escaping here would make the hashed bytes differ from the written ones, and
+// the redaction marker <redacted:NB> contains two of the three characters
+// json.Marshal escapes. internal/approval deliberately uses plain
+// json.Marshal for the approval card, which is rendered as HTML by Telegram —
+// two callers, two requirements, so the two encodings must stay separate.
+// approval.card() does its own html.EscapeString and does not depend on its
+// marshaller's behaviour, so unifying them would not be safe here either; it
+// would just be wrong in the other direction.
 func MarshalArgs(v any) json.RawMessage {
 	b, err := canonicalJSON(v)
 	if err != nil {

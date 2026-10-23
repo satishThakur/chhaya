@@ -93,7 +93,11 @@ func TestMutatingAPastRecordFailsVerification(t *testing.T) {
 	}
 }
 
-func TestTruncationFailsVerification(t *testing.T) {
+// TestARemovedRecordFailsVerification is named for exactly what it tests. It
+// used to be called TestTruncationFailsVerification, which claimed the
+// general case while only removing a record from the middle; truncating the
+// tail verifies clean and always has. See the package doc comment.
+func TestARemovedRecordFailsVerification(t *testing.T) {
 	p := tmpLog(t)
 	w, _ := Open(p)
 	for i := 0; i < 4; i++ {
@@ -233,4 +237,30 @@ func readLines(t *testing.T, p string) []string {
 		t.Fatal(err)
 	}
 	return strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+}
+
+// TestAnInjectedFieldFailsVerification covers the gap between "the fields we
+// know about hash correctly" and "the bytes on disk are the bytes we wrote".
+// json.Unmarshal silently drops keys the struct does not declare, so a key
+// added to a record — one a human or a grep would read as part of it —
+// survived verification untouched.
+func TestAnInjectedFieldFailsVerification(t *testing.T) {
+	p := tmpLog(t)
+	w, _ := Open(p)
+	w.Append(rec("ping"))
+	w.Close()
+
+	lines := readLines(t, p)
+	lines[0] = strings.Replace(lines[0], `{"seq":`, `{"note":"approved by ops","seq":`, 1)
+	if !strings.Contains(lines[0], `"note"`) {
+		t.Fatal("precondition: the injection did not land")
+	}
+	os.WriteFile(p, []byte(strings.Join(lines, "\n")+"\n"), 0o600)
+
+	if _, err := Verify(p); err == nil {
+		t.Fatal("a key injected into a record must break verification")
+	}
+	if _, err := Open(p); err == nil {
+		t.Fatal("and a log that does not verify must not be appended to")
+	}
 }
