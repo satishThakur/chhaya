@@ -4,11 +4,14 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/satishthakur/chhaya/internal/audit"
@@ -36,9 +39,9 @@ func main() {
 		}
 		err = runVerify(filepath.Join(*dataDir, "audit.jsonl"), os.Stdout)
 	case "stop":
-		err = runStop(filepath.Join(*dataDir, "state.json"), true)
+		err = runStop(filepath.Join(*dataDir, "state.json"), true, os.Stdout)
 	case "resume":
-		err = runStop(filepath.Join(*dataDir, "state.json"), false)
+		err = runStop(filepath.Join(*dataDir, "state.json"), false, os.Stdout)
 	case "policy":
 		if len(args) < 2 || args[1] != "explain" {
 			usage()
@@ -69,6 +72,10 @@ func usage() {
 func runVerify(path string, out io.Writer) error {
 	n, err := audit.Verify(path)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			fmt.Fprintf(out, "no audit log at %s — nothing to verify\n", path)
+			return err
+		}
 		fmt.Fprintf(out, "FAILED after %d records\n", n)
 		return err
 	}
@@ -76,7 +83,7 @@ func runVerify(path string, out io.Writer) error {
 	return nil
 }
 
-func runStop(statePath string, on bool) error {
+func runStop(statePath string, on bool, out io.Writer) error {
 	st, err := state.Open(statePath)
 	if err != nil {
 		return err
@@ -85,9 +92,9 @@ func runStop(statePath string, on bool) error {
 		return err
 	}
 	if on {
-		fmt.Println("kill switch ON — writes will be refused; reads still work")
+		fmt.Fprintf(out, "kill switch ON — writes will be refused; reads still work\n")
 	} else {
-		fmt.Println("kill switch off")
+		fmt.Fprintf(out, "kill switch off\n")
 	}
 	return nil
 }
@@ -106,7 +113,13 @@ func runExplain(policyFile string, out io.Writer) error {
 	} else {
 		fmt.Fprintf(out, "repos:       %v\n", cfg.Repos)
 	}
-	for key, c := range cfg.Caps {
+	keys := make([]string, 0, len(cfg.Caps))
+	for key := range cfg.Caps {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		c := cfg.Caps[key]
 		fmt.Fprintf(out, "cap %-8s ₹%d per order, ₹%d per day\n", key+":", c.PerOrderMinor/100, c.PerDayMinor/100)
 	}
 	fmt.Fprintln(out, "\nTiers are decided in internal/policy, not here. This file supplies values only.")
