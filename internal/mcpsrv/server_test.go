@@ -1,9 +1,12 @@
 package mcpsrv
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/satishthakur/chhaya/internal/audit"
 )
 
 func TestCheckEnvironmentIsolation(t *testing.T) {
@@ -65,6 +68,30 @@ func TestMCPHandlerDoesNotCallHandlersDirectly(t *testing.T) {
 	if strings.Contains(string(src), ".Handle(") {
 		t.Fatal("server.go calls a handler directly; it must go through Invoke")
 	}
+}
+
+// TestUnparseableArgumentsAreRefusedAndAuditedThroughInvoke proves the fix for
+// the bug where MCPHandler refused a call with bad arguments before ever
+// calling Invoke, leaving no audit record at all. ArgsError must be carried
+// into policy.Decide — which denies with args.unparseable — and Invoke's own
+// audit.Append must still run, same as any other refusal.
+func TestUnparseableArgumentsAreRefusedAndAuditedThroughInvoke(t *testing.T) {
+	g, called := newTestGateway(t, &fakeApprover{})
+
+	res := g.Invoke(context.Background(), ToolCall{
+		Actor: "hermes", Name: "probe.write", ArgsError: "arguments were not a JSON object",
+	})
+	if !res.IsError || res.RuleID != "args.unparseable" {
+		t.Fatalf("got %+v, want a refusal with rule args.unparseable", res)
+	}
+	if *called != 0 {
+		t.Fatalf("unparseable arguments must not reach the handler, called = %d", *called)
+	}
+	assertLastRecord(t, g, func(r audit.Record) {
+		if r.Decision != "deny" || r.Rule != "args.unparseable" {
+			t.Errorf("record = %+v, want decision=deny rule=args.unparseable", r)
+		}
+	})
 }
 
 // TestGatewayNeverSamplesOrElicits is the structural half of spec §3.4.

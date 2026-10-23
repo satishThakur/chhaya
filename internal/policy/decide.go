@@ -17,6 +17,17 @@ func Decide(req Request, st State, cfg Config, now time.Time) Decision {
 		return deny(d, "tool.unknown", fmt.Sprintf("blocked: %q is not a registered tool", req.Tool))
 	}
 
+	// 1b. Arguments that did not parse. Before anything else that would have
+	//     to interpret them, and before the kill switch, because a request we
+	//     cannot read is not a request we can reason about at all.
+	if !req.ArgsOK {
+		msg := req.ArgsError
+		if msg == "" {
+			msg = "arguments were not a JSON object"
+		}
+		return deny(d, "args.unparseable", "blocked: "+msg)
+	}
+
 	// 2. Kill switch, writes only. Reads stay open deliberately: a gateway that
 	//    cannot answer capabilities() while stopped cannot explain why it is stopped.
 	if st.KillSwitch && req.Kind == Write {

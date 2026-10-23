@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,23 @@ import (
 	"github.com/satishthakur/chhaya/internal/policy"
 	"github.com/satishthakur/chhaya/internal/state"
 )
+
+// defaultUnreachableAfter is how long GetUpdates must fail continuously
+// before Run treats the approval channel as unreachable and writes a
+// CRITICAL audit record. /stop is delivered only through this loop, so a
+// sustained outage here means the kill switch itself cannot be reached.
+//
+// ~2 minutes given the 25-second long poll in Run: long enough that one slow
+// response or a single dropped connection does not raise a false alarm
+// (roughly four to five consecutive failures at the 2-second retry interval),
+// short enough that a real outage is flagged well before a human would
+// otherwise notice the bot has gone quiet.
+const defaultUnreachableAfter = 2 * time.Minute
+
+// pollFailureLogInterval throttles the "still failing" log line during a
+// GetUpdates outage. Without it, a sustained outage would log once every
+// 2-second retry forever.
+const pollFailureLogInterval = 30 * time.Second
 
 // callbackSecret salts the token embedded in each button so that a
 // callback_data value cannot be guessed or replayed across restarts.
@@ -55,6 +73,11 @@ type Bot struct {
 
 	mu      sync.Mutex
 	waiting map[int64]*pending // keyed by the card's message id
+
+	// unreachableAfter is injectable so a test can prove the CRITICAL record
+	// fires without waiting out the production threshold. NewBot sets the
+	// production default; nothing else may change it on a live Bot.
+	unreachableAfter time.Duration
 }
 
 // NewBot wires the approver bot. chatID is both the chat we post to and the
@@ -62,7 +85,10 @@ type Bot struct {
 // user id are the same number, and collapsing them means there is no way to
 // configure a chat we listen to but do not trust.
 func NewBot(tg Telegram, chatID int64, st *state.Store, w *audit.Writer, timeout time.Duration) *Bot {
-	return &Bot{tg: tg, chatID: chatID, state: st, audit: w, timeout: timeout, waiting: map[int64]*pending{}}
+	return &Bot{
+		tg: tg, chatID: chatID, state: st, audit: w, timeout: timeout,
+		waiting: map[int64]*pending{}, unreachableAfter: defaultUnreachableAfter,
+	}
 }
 
 // var _ mcpsrv.Approver forces a compile error the moment *Bot drifts from
@@ -98,6 +124,14 @@ func (b *Bot) SendStartupCard(ctx context.Context, policyHash string, firstBoot 
 // Run long-polls for commands and button taps until ctx is done.
 func (b *Bot) Run(ctx context.Context) error {
 	var offset int64
+
+	// failingSince and alarmed track a continuous run of GetUpdates failures.
+	// Both are reset the moment a poll succeeds: a brief blip and a sustained
+	// outage must not be confused with each other, and the whole point of
+	// "continuous" is that a single good poll proves the channel is back.
+	var failingSince, lastLogged time.Time
+	alarmed := false
+
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -107,9 +141,39 @@ func (b *Bot) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+
+			now := time.Now()
+			if failingSince.IsZero() {
+				failingSince = now
+			}
+			if now.Sub(lastLogged) >= pollFailureLogInterval {
+				fmt.Fprintf(os.Stderr, "approver bot: GetUpdates failing since %s: %v\n",
+					failingSince.UTC().Format(time.RFC3339), err)
+				lastLogged = now
+			}
+			if !alarmed && now.Sub(failingSince) >= b.unreachableAfter {
+				// /stop is delivered only through this loop. A sustained
+				// outage here means the kill switch itself is unreachable,
+				// and that is a CRITICAL event even though no tool call is
+				// involved — there is nothing to deny, only something to
+				// alarm on.
+				b.appendRecord(audit.Record{
+					Actor: "approver", Tool: "approver.poll", Kind: "read", Tier: int(policy.TierInternal),
+					Args:     audit.MarshalArgs(map[string]any{"failing_since": failingSince.UTC().Format(time.RFC3339)}),
+					Decision: "deny", Rule: "approver.channel_unreachable",
+					Reason: fmt.Sprintf("the approval channel has been unreachable for over %s; "+
+						"/stop cannot be delivered until it recovers", b.unreachableAfter),
+					Result:   audit.Result{Status: "refused", Error: err.Error()},
+					Severity: "critical",
+				})
+				alarmed = true
+			}
 			time.Sleep(2 * time.Second) // transient; keep polling
 			continue
 		}
+
+		failingSince, lastLogged = time.Time{}, time.Time{}
+		alarmed = false
 		for _, u := range ups {
 			if u.ID >= offset {
 				offset = u.ID + 1

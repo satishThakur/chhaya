@@ -89,7 +89,14 @@ func run() error {
 
 	// Step 5. A card only on first boot or a policy change.
 	markFile := filepath.Join(dataDir, "policy.hash")
-	prev, _ := os.ReadFile(markFile)
+	prev, err := os.ReadFile(markFile)
+	if err != nil && !os.IsNotExist(err) {
+		// Not fatal — "no prior boot" and "can't tell" both fall back to
+		// posting the card, which is the safe side to err on — but silently
+		// treating an unreadable mark file as first boot would hide a real
+		// filesystem problem in dataDir.
+		log.Printf("could not read %s: %v; treating this as first boot", markFile, err)
+	}
 	if string(prev) != policyHash {
 		if err := bot.SendStartupCard(ctx, policyHash, len(prev) == 0); err != nil {
 			return fmt.Errorf("the approver chat accepted getChat but refused a message, "+
@@ -101,9 +108,12 @@ func run() error {
 	}
 
 	go func() {
-		if err := bot.Run(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("approver bot stopped: %v", err)
+		err := bot.Run(ctx)
+		if ctx.Err() != nil {
+			log.Print("approver bot stopped: shutting down")
+			return
 		}
+		log.Printf("approver bot stopped unexpectedly: %v", err)
 	}()
 
 	// Build the gateway. Describe is a closure because capabilities needs the

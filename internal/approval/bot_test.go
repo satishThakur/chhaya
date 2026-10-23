@@ -20,12 +20,13 @@ import (
 const allowedUser = int64(8726466304)
 
 type fakeTG struct {
-	mu        sync.Mutex
-	sent      []string
-	updates   []Update
-	sendErr   error
-	getChatOK bool
-	answered  []string
+	mu            sync.Mutex
+	sent          []string
+	updates       []Update
+	sendErr       error
+	getChatOK     bool
+	answered      []string
+	getUpdatesErr error // non-nil: GetUpdates always fails, for the channel-unreachable test
 	// reply, if set, is the callback this fake produces the moment a card is sent.
 	reply func(messageID int64) *Update
 	out   chan Update
@@ -79,6 +80,14 @@ func (f *fakeTG) AnswerCallback(_ context.Context, id, _ string) error {
 }
 
 func (f *fakeTG) GetUpdates(ctx context.Context, _ int64, timeout time.Duration) ([]Update, error) {
+	f.mu.Lock()
+	err := f.getUpdatesErr
+	f.mu.Unlock()
+	if err != nil {
+		// Fails immediately rather than waiting out timeout, so a test can
+		// drive many failures quickly instead of waiting a real long poll.
+		return nil, err
+	}
 	select {
 	case u := <-f.out:
 		return []Update{u}, nil
@@ -331,6 +340,49 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("condition never became true")
+}
+
+// TestChannelUnreachableRaisesACriticalRecord proves the fix for the dead
+// error branch in Run: previously a continuously failing GetUpdates was
+// retried forever with nothing logged and no record of it anywhere, which
+// matters because /stop is delivered only through this loop. The threshold is
+// injected on this *Bot (b.unreachableAfter), not shortened on the package
+// default, so production's defaultUnreachableAfter is untouched by this test.
+func TestChannelUnreachableRaisesACriticalRecord(t *testing.T) {
+	tg := newFakeTG()
+	tg.getUpdatesErr = errors.New("connection refused")
+	b, _, logPath := newTestBot(t, tg, time.Second)
+	b.unreachableAfter = 10 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go b.Run(ctx)
+
+	// Run's retry sleep between failed polls is a fixed 2 seconds (unaffected
+	// by unreachableAfter), so this needs more headroom than waitFor's 2
+	// second deadline gives: the first failure cannot raise the alarm (zero
+	// elapsed time cannot exceed any positive threshold), so the earliest
+	// possible alarm is on the second failed attempt, after one full retry
+	// sleep has elapsed.
+	deadline := time.Now().Add(5 * time.Second)
+	var recs []audit.Record
+	for time.Now().Before(deadline) {
+		recs = records(t, logPath)
+		if len(recs) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(recs) == 0 {
+		t.Fatal("no audit record was written for a continuously unreachable approval channel")
+	}
+	last := recs[len(recs)-1]
+	if last.Rule != "approver.channel_unreachable" {
+		t.Errorf("rule = %q, want approver.channel_unreachable", last.Rule)
+	}
+	if last.Severity != "critical" {
+		t.Errorf("severity = %q, want critical: a dead kill switch is a CRITICAL event", last.Severity)
+	}
 }
 
 func records(t *testing.T, path string) []audit.Record {

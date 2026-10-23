@@ -73,20 +73,26 @@ func (g *Gateway) MCPHandler(name, version string) http.Handler {
 	srv := mcp.NewServer(&mcp.Implementation{Name: name, Version: version}, nil)
 
 	for _, reg := range g.tools {
-		reg := reg
 		srv.AddTool(&mcp.Tool{
 			Name:        reg.Name,
 			Description: reg.Description,
 			InputSchema: reg.Schema,
 		}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			// A parse failure is carried into Invoke as ArgsError rather than
+			// refused here. Refusing outside Invoke would be a second refusal
+			// path that never reaches policy.Decide or the audit log — exactly
+			// the shortcut the single evaluation order exists to rule out. The
+			// message is deliberately generic: the raw unmarshal error can echo
+			// the caller's bytes, and those bytes must not reach the audit log.
 			args := map[string]any{}
+			var argsErr string
 			if len(req.Params.Arguments) > 0 {
 				if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
-					return errorResult("arguments were not a JSON object"), nil
+					argsErr = "arguments were not a JSON object"
 				}
 			}
 
-			res := g.Invoke(ctx, ToolCall{Actor: "hermes", Name: req.Params.Name, Args: args})
+			res := g.Invoke(ctx, ToolCall{Actor: "hermes", Name: req.Params.Name, Args: args, ArgsError: argsErr})
 			if res.IsError {
 				return errorResult(res.Error), nil
 			}

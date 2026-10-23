@@ -18,7 +18,7 @@ func baseCfg() Config {
 }
 
 func req(tool string, tier Tier, kind Kind) Request {
-	return Request{Tool: tool, Tier: tier, Kind: kind, Known: true, ValidatorOK: true}
+	return Request{Tool: tool, Tier: tier, Kind: kind, Known: true, ArgsOK: true, ValidatorOK: true}
 }
 
 func TestDecideEvaluationOrder(t *testing.T) {
@@ -37,6 +37,9 @@ func TestDecideEvaluationOrder(t *testing.T) {
 
 		{"unknown tool denies even when the kill switch would also deny",
 			Request{Tool: "nope", Known: false}, killed, Deny, "tool.unknown"},
+
+		{"unparseable arguments deny before the kill switch is even consulted",
+			Request{Tool: "memory.propose_update", Known: true, ArgsOK: false, Kind: Write}, killed, Deny, "args.unparseable"},
 
 		{"kill switch denies a tier-0 write",
 			req("memory.propose_update", TierInternal, Write), killed, Deny, "killswitch.active"},
@@ -63,7 +66,12 @@ func TestDecideEvaluationOrder(t *testing.T) {
 			req("code.run_task", TierReversible, Write), State{}, Allow, "tier1.validated"},
 
 		{"tier 2 needs approval",
-			func() Request { r := req("food.place_order", TierMoney, Write); r.CapKey = "food"; r.AmountMinor = 40000; return r }(),
+			func() Request {
+				r := req("food.place_order", TierMoney, Write)
+				r.CapKey = "food"
+				r.AmountMinor = 40000
+				return r
+			}(),
 			State{}, NeedApproval, "tier2.approval"},
 	}
 
@@ -159,7 +167,7 @@ func allInputs() []Request {
 		for _, kind := range []Kind{Read, Write} {
 			for _, vok := range []bool{true, false} {
 				out = append(out, Request{
-					Tool: "t", Tier: tier, Kind: kind, Known: true, ValidatorOK: vok,
+					Tool: "t", Tier: tier, Kind: kind, Known: true, ArgsOK: true, ValidatorOK: vok,
 				})
 			}
 		}

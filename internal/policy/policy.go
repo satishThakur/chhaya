@@ -65,6 +65,11 @@ type Request struct {
 	// Known reports whether the registry recognised Tool. False denies.
 	Known bool
 
+	// ArgsOK reports whether the caller's arguments parsed into an object at
+	// all. False denies: a request we cannot read is one we cannot evaluate.
+	ArgsOK    bool
+	ArgsError string
+
 	// ValidatorOK reports whether the tool's own validators passed. Consulted
 	// only for tier 1. False denies.
 	ValidatorOK  bool

@@ -33,6 +33,12 @@ type ToolCall struct {
 	Actor string // "hermes"
 	Name  string
 	Args  map[string]any
+
+	// ArgsError, if non-empty, means the caller's arguments did not parse into
+	// an object at all. Invoke carries it into policy.Decide rather than
+	// refusing before Decide runs, so an unparseable call still goes through
+	// the one evaluation order and still gets an audit record.
+	ArgsError string
 }
 
 type ToolResult struct {
@@ -92,12 +98,14 @@ func (g *Gateway) Invoke(ctx context.Context, call ToolCall) ToolResult {
 	reg, known := g.tools[call.Name]
 
 	req := policy.Request{
-		Tool:   call.Name,
-		Args:   call.Args,
-		Known:  known,
-		Kind:   reg.Kind,
-		Tier:   reg.Tier,
-		CapKey: reg.CapKey,
+		Tool:      call.Name,
+		Args:      call.Args,
+		Known:     known,
+		Kind:      reg.Kind,
+		Tier:      reg.Tier,
+		CapKey:    reg.CapKey,
+		ArgsOK:    call.ArgsError == "",
+		ArgsError: call.ArgsError,
 	}
 	// Consulted whenever a validator was supplied, not only for tier 1: a
 	// registration that attaches one and never has it called is a trap.
