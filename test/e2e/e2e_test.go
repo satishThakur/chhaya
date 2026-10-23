@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/satishthakur/chhaya/internal/audit"
 	"github.com/satishthakur/chhaya/internal/mcpsrv"
 	"github.com/satishthakur/chhaya/internal/policy"
@@ -216,4 +217,139 @@ func TestClientWithoutACertificateIsRefused(t *testing.T) {
 		t.Fatalf("Hermes' own certificate was refused: %v", err)
 	}
 	resp.Body.Close()
+}
+
+// TestBlockedWriteOverRealMTLS is the exit check through the door Hermes
+// actually knocks on. TestExitCheckBlockedWriteIsLogged proves the policy and
+// the audit record in-process; TestClientWithoutACertificateIsRefused proves
+// the transport enforces mTLS against a bare handler. Neither proves the two
+// assembled: that a blocked write still ends up denied-with-an-audit-record
+// when it arrives as a real MCP tool call, over mTLS, through
+// Gateway.MCPHandler. This test assembles them.
+//
+// Certs are required, not skipped-if-missing: a skipped test reports green,
+// and this is the one test that must not quietly pass by not running.
+func TestBlockedWriteOverRealMTLS(t *testing.T) {
+	certDir := "../../deploy/certs"
+	if _, err := os.Stat(filepath.Join(certDir, "ca.crt")); err != nil {
+		t.Fatal("certs are required for this test; run deploy/gen-certs.sh")
+	}
+
+	dir := t.TempDir()
+	st, err := state.Open(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetKillSwitch(true, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	logPath := filepath.Join(dir, "audit.jsonl")
+	w, err := audit.Open(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	memRoot := filepath.Join(dir, "memory")
+	if err := os.MkdirAll(filepath.Join(memRoot, "taste"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(memRoot, "taste", "food.md"), []byte("# Food\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := policy.Config{
+		Caps:               map[string]policy.Cap{"food": {PerOrderMinor: 80000, PerDayMinor: 150000}},
+		DefaultRatePerHour: 60, ApprovalTimeout: time.Minute, BranchPrefix: "agent/",
+	}
+
+	var g *mcpsrv.Gateway
+	regs := tools.All(tools.Deps{
+		Version: "e2e", MemoryRoot: memRoot, State: st, Config: cfg,
+		Describe: func() []mcpsrv.Registration { return g.Registrations() },
+	})
+	g, err = mcpsrv.New(cfg, st, w, refusingApprover{}, regs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tlsCfg, err := mcpsrv.TLSConfig(
+		filepath.Join(certDir, "gateway.crt"),
+		filepath.Join(certDir, "gateway.key"),
+		filepath.Join(certDir, "ca.crt"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", g.MCPHandler("chhaya-gateway", "e2e"))
+	srv := httptest.NewUnstartedServer(mux)
+	srv.TLS = tlsCfg
+	srv.StartTLS()
+	defer srv.Close()
+
+	cert, err := tls.LoadX509KeyPair(filepath.Join(certDir, "hermes.crt"), filepath.Join(certDir, "hermes.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// InsecureSkipVerify is acceptable here only because this test exercises
+	// the SERVER's enforcement of the client certificate (mTLS), not the
+	// client's trust of the server's identity. A real client must verify the
+	// server; do not copy this flag into production code.
+	httpc := &http.Client{Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{cert}, InsecureSkipVerify: true},
+	}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	c := mcp.NewClient(&mcp.Implementation{Name: "e2e-client", Version: "0"}, nil)
+	sess, err := c.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint: srv.URL + "/mcp", HTTPClient: httpc,
+	}, nil)
+	if err != nil {
+		t.Fatalf("connect over mTLS: %v", err)
+	}
+	defer sess.Close()
+
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "memory.propose_update",
+		Arguments: map[string]any{"path": "taste/food", "diff": "+ nothing", "rationale": "exit check over mTLS"},
+	})
+	if err != nil {
+		t.Fatalf("the refusal must arrive as a tool error the model can see, not a protocol error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("a write while stopped was allowed, over mTLS")
+	}
+	if text := contentText(res); !strings.Contains(text, "kill switch") {
+		t.Fatalf("tool error = %q, want it to mention the kill switch", text)
+	}
+
+	recs := readLog(t, logPath)
+	if len(recs) == 0 {
+		t.Fatal("the refusal over mTLS left no trace")
+	}
+	last := recs[len(recs)-1]
+	if last.Decision != "deny" || last.Rule != "killswitch.active" {
+		t.Fatalf("decision=%q rule=%q, want deny/killswitch.active", last.Decision, last.Rule)
+	}
+
+	if entries, err := os.ReadDir(filepath.Join(memRoot, ".proposals")); err == nil && len(entries) > 0 {
+		t.Fatalf("a proposal file was written while the kill switch was on: %v", entries)
+	} else if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
+
+func contentText(res *mcp.CallToolResult) string {
+	var sb strings.Builder
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			sb.WriteString(tc.Text)
+		}
+	}
+	return sb.String()
 }

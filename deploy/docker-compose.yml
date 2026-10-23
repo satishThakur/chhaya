@@ -6,7 +6,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.gateway
-    env_file: .env.gateway        # NEVER .env.hermes — chhayad refuses to start if it sees that file's variables
+    env_file: .env.gateway        # NEVER .env.hermes — chhayad refuses to start if TELEGRAM_BOT_TOKEN is set in its environment
     environment:
       CHHAYA_DATA_DIR: /data
       CHHAYA_POLICY_FILE: /etc/chhaya/policy.yaml

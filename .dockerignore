@@ -1,0 +1,11 @@
+# The build context is the repo root. Nothing secret may enter a build layer,
+# even one that is discarded — build stages are cached locally.
+.git/
+.superpowers/
+deploy/certs/
+deploy/.env
+deploy/.env.*
+!deploy/.env.*.example
+*.key
+*.pem
+bin/
