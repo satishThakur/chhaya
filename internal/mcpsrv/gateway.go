@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/satishthakur/chhaya/internal/audit"
@@ -16,6 +17,17 @@ import (
 )
 
 var errUnreachable = errors.New("approver unreachable")
+
+// auditUnwritableRule and its message are the refusal every call gets once an
+// append has failed. It is its own rule id rather than a reuse of
+// state.unwritable so that the log — the one that still exists, elsewhere —
+// distinguishes "could not count the call" from "could not record it".
+const (
+	auditUnwritableRule = "audit.unwritable"
+	auditUnwritableMsg  = "refused: the gateway could not write its audit log, so it is refusing every call, " +
+		"reads included, until the log is writable again and the gateway is restarted. " +
+		"Tell the user the audit log is unwritable and the gateway needs attention."
+)
 
 // approvalBackstopMargin is added to cfg.ApprovalTimeout to bound the
 // approver call in Invoke. It is a var rather than a literal only so a test
@@ -57,6 +69,13 @@ type Gateway struct {
 	approver  Approver
 	tools     registry
 	now       func() time.Time
+
+	// auditBroken latches on the first failed append and is never cleared.
+	// Startup already treats a log it cannot trust as a refusal to start;
+	// this is the same answer for the same condition discovered at runtime.
+	// A gateway that keeps dispatching with no audit trail cannot prove what
+	// it answered, and the unattended case is exactly where that matters.
+	auditBroken atomic.Bool
 }
 
 func New(cfg policy.Config, st *state.Store, w *audit.Writer, ap Approver, regs []Registration) (*Gateway, error) {
@@ -94,6 +113,18 @@ func (g *Gateway) Registrations() []Registration {
 // policy.Decide → dispatch-or-refuse → audit.Append. There is no branch that
 // skips the first or the last.
 func (g *Gateway) Invoke(ctx context.Context, call ToolCall) ToolResult {
+	// Reads are refused too. The kill switch leaves reads open so the gateway
+	// can explain why it is stopped, but that argument does not transfer: a
+	// read we cannot log is still an unprovable answer, and the explanation
+	// is in this error string rather than in a tool call.
+	//
+	// This refusal writes no audit record, because the thing that just failed
+	// is writing audit records. The error is the only trace, which is why it
+	// tells Hermes to say so out loud.
+	if g.auditBroken.Load() {
+		return ToolResult{IsError: true, RuleID: auditUnwritableRule, Error: auditUnwritableMsg}
+	}
+
 	start := g.now()
 	reg, known := g.tools[call.Name]
 
@@ -136,7 +167,7 @@ func (g *Gateway) Invoke(ctx context.Context, call ToolCall) ToolResult {
 		// this one.
 		apCtx, cancel := context.WithTimeout(ctx, g.cfg.ApprovalTimeout+approvalBackstopMargin)
 		defer cancel()
-		approved, latency, err := g.approver.Request(apCtx, call, d)
+		approved, latency, err := callApprover(apCtx, g.approver, call, d)
 		if err != nil {
 			// The safety channel itself is down. Refuse loudly, and tell Hermes
 			// in a way it can repeat to the user: the agent becomes the
@@ -243,6 +274,21 @@ func callValidator(v Validator, args map[string]any) (err error) {
 	return v(args)
 }
 
+// callApprover recovers for the same reason, and it matters more here: the
+// approver is a third implementation of an interface this package does not
+// own, and a panic inside it would unwind past record() — leaving the
+// needs_approval record with status "pending" as the log's last word on a
+// call that never finished. A panic becomes the same error an unreachable
+// approver returns, which Invoke already handles as a CRITICAL refusal.
+func callApprover(ctx context.Context, ap Approver, call ToolCall, d policy.Decision) (approved bool, latency time.Duration, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			approved, err = false, fmt.Errorf("approver panicked: %v", r)
+		}
+	}()
+	return ap.Request(ctx, call, d)
+}
+
 func (g *Gateway) refuse(call ToolCall, reg Registration, st policy.State, d policy.Decision, start time.Time, sev string) ToolResult {
 	g.record(call, reg, st, d, "deny", d.RuleID, d.Reason, nil, audit.Result{Status: "refused"}, start, sev)
 	return ToolResult{IsError: true, RuleID: d.RuleID, Error: d.Reason}
@@ -273,10 +319,12 @@ func (g *Gateway) record(call ToolCall, reg Registration, st policy.State, d pol
 		Severity:   severity,
 	}
 	if _, err := g.audit.Append(r); err != nil {
-		// This does not retroactively undo a dispatch that already ran, and it
-		// does not make later calls refuse either — there is no record of the
-		// failure beyond this line. stderr is the only place left to put it.
-		fmt.Fprintf(os.Stderr, "CRITICAL: audit append failed: %v\n", err)
+		// The dispatch that already ran cannot be undone; the next one can be
+		// prevented. Latch, so every later call is refused, and shout on
+		// stderr, because the log that would otherwise hold this is the thing
+		// that just failed.
+		g.auditBroken.Store(true)
+		fmt.Fprintf(os.Stderr, "CRITICAL: audit append failed, refusing all further calls: %v\n", err)
 	}
 }
 

@@ -682,3 +682,77 @@ func readRecords(t *testing.T, g *Gateway) []audit.Record {
 	}
 	return out
 }
+
+// TestAFailedAuditAppendLatchesAndRefusesEverything pins the runtime half of
+// "a log we cannot write is a refusal". Startup already refuses to open a log
+// it cannot trust; before this, a log that became unwritable mid-run only
+// produced a line on stderr while the gateway kept dispatching — the lenient
+// answer, on the path that runs unattended.
+func TestAFailedAuditAppendLatchesAndRefusesEverything(t *testing.T) {
+	g, called := newTestGateway(t, &fakeApprover{})
+
+	// The log goes unwritable under a running gateway. Closing the file the
+	// writer holds is how a detached volume or a revoked permission reaches
+	// an already-open descriptor: the next write fails, chmod would not.
+	if err := g.audit.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The call that discovers it still runs. That dispatch cannot be undone,
+	// and pretending otherwise would be the wrong claim to encode.
+	first := g.Invoke(context.Background(), ToolCall{Actor: "hermes", Name: "probe.write"})
+	if first.IsError {
+		t.Fatalf("the call that discovers the failure should still complete: %+v", first)
+	}
+	if *called != 1 {
+		t.Fatalf("handler ran %d times, want 1", *called)
+	}
+
+	// Everything after it is refused — including a read, and including a call
+	// that policy would have denied anyway, so the refusal is the gateway's
+	// and not a coincidence of the rule that would otherwise have fired.
+	for _, name := range []string{"probe.read", "probe.write", "rm.rf"} {
+		res := g.Invoke(context.Background(), ToolCall{Actor: "hermes", Name: name})
+		if !res.IsError || res.RuleID != "audit.unwritable" {
+			t.Errorf("%s after the log broke: got %+v, want a refusal with rule audit.unwritable", name, res)
+		}
+	}
+	if *called != 1 {
+		t.Fatalf("a call was dispatched after the audit log became unwritable; handler ran %d times", *called)
+	}
+}
+
+// TestAPanickingApproverIsRefusedAndAudited: handler and validator panics are
+// already recovered so that record() still runs. The approver is a third
+// implementation of an interface this package does not own, and its panic
+// would unwind past record() just as surely — leaving the needs_approval
+// record's "pending" as the log's last word.
+func TestAPanickingApproverIsRefusedAndAudited(t *testing.T) {
+	g, called := newTestGateway(t, approverFunc(func(context.Context, ToolCall, policy.Decision) (bool, time.Duration, error) {
+		panic("the approver blew up")
+	}))
+	// Taint escalates any write to approval, which is how this tier-0 probe
+	// reaches the approver at all.
+	if err := g.state.SetTaint(true, "probe.untrusted", g.now()); err != nil {
+		t.Fatal(err)
+	}
+
+	res := g.Invoke(context.Background(), ToolCall{Actor: "hermes", Name: "probe.write"})
+	if !res.IsError || res.RuleID != "approval.unreachable" {
+		t.Fatalf("got %+v, want a refusal with rule approval.unreachable", res)
+	}
+	if *called != 0 {
+		t.Fatalf("the write ran despite no approval; handler ran %d times", *called)
+	}
+	assertLastRecord(t, g, func(r audit.Record) {
+		if r.Decision != "deny" || r.Rule != "approval.unreachable" || r.Severity != "critical" {
+			t.Errorf("record = %+v, want decision=deny rule=approval.unreachable severity=critical", r)
+		}
+		if r.Approval == nil || r.Approval.Answer != "channel_failed" {
+			t.Errorf("approval = %+v, want answer=channel_failed", r.Approval)
+		}
+		if r.Result.Error == "" {
+			t.Error("the record should carry the panic as the result error")
+		}
+	})
+}
