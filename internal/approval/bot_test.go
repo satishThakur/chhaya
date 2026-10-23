@@ -35,7 +35,9 @@ func newFakeTG() *fakeTG {
 	return &fakeTG{getChatOK: true, out: make(chan Update, 16)}
 }
 
-func (f *fakeTG) GetMe(context.Context) (int64, string, error) { return 8940896193, "satish_chhaya_approver_bot", nil }
+func (f *fakeTG) GetMe(context.Context) (int64, string, error) {
+	return 8940896193, "satish_chhaya_approver_bot", nil
+}
 
 func (f *fakeTG) GetChat(_ context.Context, _ int64) error {
 	if !f.getChatOK {
@@ -166,6 +168,35 @@ func TestAnUnauthorisedSenderIsIgnoredAndAudited(t *testing.T) {
 	}
 }
 
+// TestAnUnauthorisedCallbackIsIgnoredAndAudited is the callback-side twin of
+// TestAnUnauthorisedSenderIsIgnoredAndAudited. The two look symmetric by
+// inspection, but an authorisation check nothing exercises is one that can
+// silently stop working, and tap() is where a forged approval would land.
+func TestAnUnauthorisedCallbackIsIgnoredAndAudited(t *testing.T) {
+	tg := newFakeTG()
+	b, _, logPath := newTestBot(t, tg, time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go b.Run(ctx)
+
+	tg.out <- Update{ID: time.Now().UnixNano(), Callback: &Callback{
+		ID: "cb-stranger", From: User{ID: 999}, Data: "approve:forged",
+		Message: &Message{ID: 1, Chat: Chat{ID: allowedUser}},
+	}}
+
+	waitFor(t, func() bool { return len(records(t, logPath)) > 0 })
+	if len(tg.answered) != 0 {
+		t.Fatal("an unauthorised tap must never reach tap(); answering it would close a loop that was never opened")
+	}
+	last := records(t, logPath)[0]
+	if last.Rule != "approver.unauthorized_sender" {
+		t.Errorf("rule = %q", last.Rule)
+	}
+	if !strings.Contains(string(last.Args), "999") {
+		t.Error("the record should say who it was, so we can see it happening")
+	}
+}
+
 func TestApprovalTimeoutDenies(t *testing.T) {
 	tg := newFakeTG() // reply is nil: nobody taps
 	b, _, logPath := newTestBot(t, tg, 150*time.Millisecond)
@@ -174,7 +205,7 @@ func TestApprovalTimeoutDenies(t *testing.T) {
 	go b.Run(ctx)
 
 	approved, latency, err := b.Request(ctx, mcpsrv.ToolCall{Name: "probe.write"},
-		policy.Decision{Outcome: policy.NeedApproval, RuleID: "taint.write", Reason: "tainted"})
+		policy.Decision{Outcome: policy.NeedApproval, Tier: policy.TierMoney, RuleID: "taint.write", Reason: "tainted"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +223,11 @@ func TestApprovalTimeoutDenies(t *testing.T) {
 	last := recs[len(recs)-1]
 	if last.Approval == nil || last.Approval.Answer != "timeout" {
 		t.Errorf("record = %+v", last)
+	}
+	// A timed-out tier-2 approval must not read as a tier-0 internal action
+	// in a permanent ledger.
+	if last.Tier != int(policy.TierMoney) {
+		t.Errorf("tier = %d, want %d: the decision that timed out was tier-2", last.Tier, int(policy.TierMoney))
 	}
 }
 
@@ -265,6 +301,23 @@ func TestPreflightRefusesAnUnreachableChat(t *testing.T) {
 
 	if err := b.Preflight(context.Background()); err == nil {
 		t.Fatal("an unreachable approver chat must stop the gateway starting")
+	}
+}
+
+// TestSendStartupCardDoesNotPanicOnAShortHash guards against a hash shorter
+// than the 12-character prefix the startup card shows. A naive policyHash[:12]
+// slice would panic on anything shorter, crashing the gateway on startup
+// instead of just showing the whole (short) hash.
+func TestSendStartupCardDoesNotPanicOnAShortHash(t *testing.T) {
+	tg := newFakeTG()
+	b, _, _ := newTestBot(t, tg, time.Second)
+
+	if err := b.SendStartupCard(context.Background(), "abcd", true); err != nil {
+		t.Fatal(err)
+	}
+	texts := tg.texts()
+	if len(texts) == 0 || !strings.Contains(texts[0], "abcd") {
+		t.Errorf("startup card does not show the short hash: %v", texts)
 	}
 }
 

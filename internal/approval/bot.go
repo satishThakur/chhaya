@@ -22,7 +22,14 @@ import (
 // callback_data value cannot be guessed or replayed across restarts.
 var callbackSecret = func() []byte {
 	b := make([]byte, 32)
-	rand.Read(b)
+	// A process that cannot obtain randomness must not serve approvals: a
+	// weak or predictable secret here would let a forged callback_data value
+	// pass the anti-replay check in tap(). Panicking at package init is
+	// preferable to starting up with a silently weak secret on the kill
+	// switch's approval path.
+	if _, err := rand.Read(b); err != nil {
+		panic("approval: could not seed callback secret: " + err.Error())
+	}
 	return b
 }()
 
@@ -57,6 +64,11 @@ type Bot struct {
 func NewBot(tg Telegram, chatID int64, st *state.Store, w *audit.Writer, timeout time.Duration) *Bot {
 	return &Bot{tg: tg, chatID: chatID, state: st, audit: w, timeout: timeout, waiting: map[int64]*pending{}}
 }
+
+// var _ mcpsrv.Approver forces a compile error the moment *Bot drifts from
+// the interface mcpsrv.Gateway actually calls, rather than waiting for the
+// daemon task that first wires the two together to find out.
+var _ mcpsrv.Approver = (*Bot)(nil)
 
 // Preflight is startup steps 3 and 4: the token must work, and the chat must
 // be reachable. Either failing means the gateway does not start.
@@ -126,27 +138,38 @@ func (b *Bot) handle(ctx context.Context, u Update) {
 
 func (b *Bot) command(ctx context.Context, text string) {
 	now := time.Now()
-	switch {
-	case strings.HasPrefix(text, "/stop"):
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return
+	}
+	// A prefix match on the raw text would fire the kill switch on "/stopped"
+	// as readily as on "/stop", which is a bad place for imprecise parsing
+	// even though only the trusted approver can reach this path. Parse the
+	// first whitespace-separated field and switch on it exactly. Telegram
+	// also sends "/stop@botname" in group chats; strip the "@suffix" so that
+	// form still matches, even though group join is disabled today.
+	cmd, _, _ := strings.Cut(fields[0], "@")
+	switch cmd {
+	case "/stop":
 		if err := b.state.SetKillSwitch(true, now); err != nil {
 			b.tg.SendMessage(ctx, b.chatID, "could not persist the kill switch: "+err.Error(), nil)
 			return
 		}
 		b.tg.SendMessage(ctx, b.chatID, "<b>stopped.</b> Writes are refused. Reads still work so it can tell you why. /resume to lift.", nil)
 
-	case strings.HasPrefix(text, "/resume"):
+	case "/resume":
 		if err := b.state.SetKillSwitch(false, now); err != nil {
 			return
 		}
 		b.tg.SendMessage(ctx, b.chatID, "<b>resumed.</b> Writes are allowed again.", nil)
 
-	case strings.HasPrefix(text, "/clear"):
+	case "/clear":
 		if err := b.state.SetTaint(false, "", now); err != nil {
 			return
 		}
 		b.tg.SendMessage(ctx, b.chatID, "<b>taint cleared.</b> Writes no longer need approval on that account.", nil)
 
-	case strings.HasPrefix(text, "/status"):
+	case "/status":
 		st := b.state.Snapshot(now)
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "kill switch: <b>%s</b>\n", onOff(st.KillSwitch))
@@ -167,7 +190,7 @@ func (b *Bot) tap(ctx context.Context, c *Callback) {
 	if len(parts) != 2 || c.Message == nil {
 		return
 	}
-	if parts[1] != callbackToken(c.Message.ID) {
+	if !hmac.Equal([]byte(parts[1]), []byte(callbackToken(c.Message.ID))) {
 		b.tg.AnswerCallback(ctx, c.ID, "that card has expired")
 		return
 	}
@@ -239,8 +262,8 @@ func (b *Bot) Request(ctx context.Context, call mcpsrv.ToolCall, d policy.Decisi
 		// A timeout needs a trace as loud as a tap, and it is this package's
 		// event, not Invoke's: Invoke only sees "not approved".
 		b.appendRecord(audit.Record{
-			Actor: "approver", Tool: call.Name, Kind: "write",
-			Args: json.RawMessage(`{}`), Decision: "deny", Rule: d.RuleID,
+			Actor: "approver", Tool: call.Name, Kind: "write", Tier: int(d.Tier),
+			Args: audit.MarshalArgs(map[string]any{}), Decision: "deny", Rule: d.RuleID,
 			Reason:   "no answer within " + b.timeout.String(),
 			Approval: &audit.Approval{Answer: "timeout", LatencyMS: time.Since(start).Milliseconds()},
 			Result:   audit.Result{Status: "refused"},
