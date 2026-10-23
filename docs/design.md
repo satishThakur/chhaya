@@ -247,6 +247,8 @@ Goal for day one: talk to Hermes from Telegram, with exactly one MCP server atta
 
    Sampling and elicitation are both **on by default** in Hermes and are turned off deliberately above. Elicitation in particular would surface approval prompts as Telegram buttons *through the agent* — precisely what the separate approver bot exists to avoid.
 
+   **Hermes' built-in web, browser and fetch toolsets are disabled, and that is architectural rather than a preference.** The gateway cannot see a tool call it does not serve, so anything Hermes fetches on its own is untrusted content that arrives without passing the taint check. Taint tracking that is blind to the likeliest injection vector while diligently tracking the ones it can see is worse than none, because it reads as protection. Disabling them makes the gateway the one door for untrusted *reads*, not just for writes. Any future web access arrives as a gateway tool that marks its results untrusted.
+
    > **Verified in v0.22.2 source** (`tools/mcp_tool_server_run.py:268-276`). Both are **nested dicts, not booleans**, and both default to on: `config.get("sampling", {}).get("enabled", True)`. Writing `sampling: false` would make `config.get(...)` return `False` and then raise `AttributeError` on `.get()` — a startup crash, not a silently ignored key. `client_cert` + `client_key` is a valid pair (the list form `client_cert: [cert, key]` is the alternative; supplying both forms is rejected).
 
    Do **not** install Swiggy or GitHub MCPs into Hermes directly; the gateway connects to them as a client.

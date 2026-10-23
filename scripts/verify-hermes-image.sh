@@ -16,6 +16,9 @@ note() { printf '        %s\n' "$1"; }
 
 run() { docker run --rm --entrypoint python3 -w /opt/hermes "$IMG" -c "$1" 2>&1; }
 
+# grep inside the image without running Hermes' interpreter on our behalf.
+img_grep() { docker run --rm --entrypoint grep -w /opt/hermes "$IMG" "$@" >/dev/null 2>&1; }
+
 echo "verifying $IMG"
 echo
 
@@ -63,31 +66,29 @@ esac
 # ------------------------------------------------------- config key shapes ---
 echo
 echo "config keys  [decisions.md: M0a spike]"
-out=$(run "
-import inspect, tools.mcp_tool_server_run as m
-s = inspect.getsource(m)
-print('NESTED' if 'config.get(\"sampling\", {})' in s and 'sampling_config.get(\"enabled\", True)' in s else 'CHANGED')
-")
-[ "$out" = "NESTED" ] && ok "sampling/elicitation still nested dicts defaulting to on" \
-                      || { bad "sampling/elicitation config shape changed -> re-read before trusting the pin"; note "$out"; }
+
+# grep the files in the image rather than importing and inspecting them: we
+# are checking that specific shapes are present in Hermes' own source, not
+# executing it, so there is no reason to run their interpreter on our behalf.
+if img_grep -q 'config.get("sampling", {})' tools/mcp_tool_server_run.py \
+   && img_grep -q 'sampling_config.get("enabled", True)' tools/mcp_tool_server_run.py; then
+  ok "sampling/elicitation still nested dicts defaulting to on"
+else
+  bad "sampling/elicitation config shape changed -> re-read before trusting the pin"
+fi
 
 # Assert on the implementation, not on comment prose: the wording of the
 # config_defaults comment changed between 0.22.2 and 0.22.3 while the
 # behaviour did not, and a string match on the comment cried wolf.
-out=$(run "
-import inspect, tools.env_passthrough as e
-s = inspect.getsource(e)
-print('AUTO' if 'required_environment_variables' in s else 'CHANGED')
-")
-[ "$out" = "AUTO" ] && ok "skill-declared env vars still auto-forwarded (skills.write_approval stays load-bearing)" \
-                    || { bad "skill env passthrough mechanism changed -> revisit skills.write_approval"; note "$out"; }
+if img_grep -q 'required_environment_variables' tools/env_passthrough.py; then
+  ok "skill-declared env vars still auto-forwarded (skills.write_approval stays load-bearing)"
+else
+  bad "skill env passthrough mechanism changed -> revisit skills.write_approval"
+fi
 
-out=$(run "
-import hermes_cli.config_defaults as d, inspect, re
-s = inspect.getsource(d)
-m = re.search(r'\"approvals\":\s*\{.*?\"mode\":\s*\"(\w+)\"', s, re.S)
-print(m.group(1) if m else 'UNKNOWN')
-")
+# -A30: the "mode" key sits behind a block of explanatory comments in
+# config_defaults.py, well past the -A3 window a terser block would need.
+out=$(docker run --rm --entrypoint grep -w /opt/hermes "$IMG" -A30 '"approvals"' hermes_cli/config_defaults.py 2>&1 | grep -o '"mode":[[:space:]]*"[a-z]*"' | head -1 | sed 's/.*"\([a-z]*\)"$/\1/')
 [ "$out" = "smart" ] && ok "approvals.mode still defaults to 'smart' (we override to manual)" \
                      || note "approvals.mode default is now '$out' -- check our override still makes sense"
 
