@@ -41,13 +41,16 @@ func TestRegistryIsUnreachableExceptThroughInvoke(t *testing.T) {
 
 	// Any exported function or method whose body mentions the registry field
 	// must be Invoke. Registrations() is allowed because it returns metadata
-	// with the handlers stripped; the test below proves that.
+	// with the handlers stripped; the test below proves that. MCPHandler is
+	// allowed because it ranges over g.tools only to publish each tool's name,
+	// description and schema to the SDK — TestMCPHandlerDoesNotCallHandlersDirectly
+	// is the compensating check that it never reaches a handler directly.
 	const allowed = "Invoke"
 	for _, pkg := range pkgs {
 		for name, f := range pkg.Files {
 			ast.Inspect(f, func(n ast.Node) bool {
 				fn, ok := n.(*ast.FuncDecl)
-				if !ok || !fn.Name.IsExported() || fn.Name.Name == allowed || fn.Name.Name == "Registrations" || fn.Name.Name == "New" {
+				if !ok || !fn.Name.IsExported() || fn.Name.Name == allowed || fn.Name.Name == "Registrations" || fn.Name.Name == "New" || fn.Name.Name == "MCPHandler" {
 					return true
 				}
 				var touches bool
