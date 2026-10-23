@@ -125,3 +125,90 @@ func TestCallCountRollsOverHourly(t *testing.T) {
 		t.Fatalf("calls carried into the next hour: %d", got)
 	}
 }
+
+// TestAStopFromAnotherProcessIsSeenAndSurvives is the probe for the bug where
+// a Store held the file's contents in memory from Open onward. chhayactl is a
+// different process with a different Store, so its /stop was invisible to the
+// running daemon, and the daemon's next write flushed its stale snapshot back
+// over the operator's kill switch. Both halves are asserted here.
+func TestAStopFromAnotherProcessIsSeenAndSurvives(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "state.json")
+
+	daemon, err := Open(p) // the long-lived daemon Store
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon.RecordCall("probe.write", time.Now())
+
+	cli, err := Open(p) // a separate process
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.SetKillSwitch(true, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	if !daemon.Snapshot(time.Now()).KillSwitch {
+		t.Fatal("a running daemon does not see chhayactl stop")
+	}
+	daemon.RecordCall("probe.write", time.Now()) // the daemon's next write
+	again, _ := Open(p)
+	if !again.Snapshot(time.Now()).KillSwitch {
+		t.Fatal("the daemon's next state write erased the operator's kill switch")
+	}
+}
+
+// TestAnUnreadableFileFailsClosedOnEveryRead covers the state file going bad
+// after Open has already succeeded — the window Open itself cannot cover.
+// Snapshot has no error to return, so the failure has to show up as the kill
+// switch being on, and a mutation must refuse rather than overwrite a file it
+// could not read.
+func TestAnUnreadableFileFailsClosedOnEveryRead(t *testing.T) {
+	p := tmp(t)
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordCall("ping", t0); err != nil {
+		t.Fatal(err)
+	}
+	if s.Snapshot(t0).KillSwitch {
+		t.Fatal("precondition: a readable file should not read as stopped")
+	}
+
+	if err := os.WriteFile(p, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := s.Snapshot(t0)
+	if !got.KillSwitch {
+		t.Fatal("a state file we cannot read must read as stopped")
+	}
+	if err := s.RecordCall("ping", t0); err == nil {
+		t.Fatal("a mutation must refuse rather than overwrite state it could not read")
+	}
+	// And the unreadable bytes are still there: the refused mutation did not
+	// quietly replace them with a clean file.
+	if b, _ := os.ReadFile(p); string(b) != "{not json" {
+		t.Fatalf("the refused write changed the file: %s", b)
+	}
+}
+
+// TestADeletedFileIsAFreshStartNotAStop pins the one read failure that must
+// NOT fail closed. Provisioning a new box, or a deliberate reset, leaves no
+// file; treating that as "stopped" would mean a gateway that never starts.
+func TestADeletedFileIsAFreshStartNotAStop(t *testing.T) {
+	p := tmp(t)
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetKillSwitch(true, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	if s.Snapshot(t0).KillSwitch {
+		t.Fatal("a missing file is a fresh start, not a stop")
+	}
+}

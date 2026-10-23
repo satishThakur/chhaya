@@ -1,6 +1,13 @@
 // Package state owns the gateway's mutable world: the kill switch, the taint
 // flag, and the per-day and per-hour counters. It exists because internal/policy
 // must stay pure and something still has to survive a restart.
+//
+// The file is the source of truth, not any in-memory copy of it. chhayactl is
+// a different process from chhayad with its own Store, so a Store that cached
+// the file's contents would make `chhayactl stop` invisible to the running
+// daemon — and the daemon's next write would flush its stale copy back over
+// the operator's kill switch. Every read and every mutation therefore goes to
+// disk.
 package state
 
 import (
@@ -14,7 +21,7 @@ import (
 	"github.com/satishthakur/chhaya/internal/policy"
 )
 
-// stateVersion is written by every flush and required by every Open. It is
+// stateVersion is written by every flush and required by every read. It is
 // what makes "unreadable means stopped" true across the whole input space
 // rather than only for syntax errors: a file holding `null` or `{}` parses
 // without error but carries no state, and accepting either would silently
@@ -34,69 +41,107 @@ type persisted struct {
 	Calls       map[string]int   `json:"calls"`
 }
 
+func fresh() persisted {
+	return persisted{V: stateVersion, Spent: map[string]int64{}, Calls: map[string]int{}}
+}
+
+// Store is a handle on the state file. It holds no copy of the file's
+// contents: mu serialises this process's own read-modify-write cycles, and
+// the file itself is what every caller actually reads.
 type Store struct {
 	mu   sync.Mutex
 	path string
-	p    persisted
 }
 
-// Open reads the state file, or starts clean if there is none. An unreadable
+// Open validates the state file, or accepts that there is none. An unreadable
 // file is an error: if we cannot tell whether we are stopped, we are stopped.
+// Nothing is cached — Open exists so that a corrupt file stops the gateway at
+// startup rather than at the first tool call.
 func Open(path string) (*Store, error) {
-	s := &Store{path: path, p: persisted{Spent: map[string]int64{}, Calls: map[string]int{}}}
+	if _, err := load(path); err != nil {
+		return nil, err
+	}
+	return &Store{path: path}, nil
+}
 
+// load reads and validates the file. A missing file is a legitimate fresh
+// start and returns a clean state with no error; anything else that cannot be
+// read as state is an error.
+func load(path string) (persisted, error) {
 	b, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return s, nil
+		return fresh(), nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read state: %w", err)
+		return persisted{}, fmt.Errorf("read state: %w", err)
 	}
 	// Decode into a pointer, not a value: json.Unmarshal of the literal `null`
 	// into a value target succeeds and leaves it untouched, so a file corrupted
 	// down to four bytes would read as "not stopped".
 	var p *persisted
 	if err := json.Unmarshal(b, &p); err != nil {
-		return nil, fmt.Errorf("state file at %s is unreadable, so we cannot tell whether we are stopped: %w", path, err)
+		return persisted{}, fmt.Errorf("state file at %s is unreadable, so we cannot tell whether we are stopped: %w", path, err)
 	}
 	if p == nil {
-		return nil, fmt.Errorf("state file at %s holds JSON null, not state; delete it deliberately if you mean to start clean", path)
+		return persisted{}, fmt.Errorf("state file at %s holds JSON null, not state; delete it deliberately if you mean to start clean", path)
 	}
 	if p.V != stateVersion {
-		return nil, fmt.Errorf("state file at %s has version %d, want %d; refusing to guess what it means", path, p.V, stateVersion)
+		return persisted{}, fmt.Errorf("state file at %s has version %d, want %d; refusing to guess what it means", path, p.V, stateVersion)
 	}
-	s.p = *p
-	if s.p.Spent == nil {
-		s.p.Spent = map[string]int64{}
+	if p.Spent == nil {
+		p.Spent = map[string]int64{}
 	}
-	if s.p.Calls == nil {
-		s.p.Calls = map[string]int{}
+	if p.Calls == nil {
+		p.Calls = map[string]int{}
 	}
-	return s, nil
+	return *p, nil
 }
 
 // Snapshot returns the state as policy.Decide should see it at now, with
 // expired counters already zeroed so the caller cannot forget to roll them.
+//
+// It re-reads the file every time. The file is a few hundred bytes and sits in
+// page cache, and correctness is worth that read: this is the only way a
+// running daemon sees a kill switch set by another process. There is
+// deliberately no mtime or size shortcut — a second write within the same
+// timestamp granularity, or one that happens to be the same length, would be
+// exactly the write we must not miss.
+//
+// It returns no error because every caller is on a path where there is nothing
+// useful to do with one. A read that fails for any reason other than the file
+// not existing therefore fails closed: the returned state has the kill switch
+// on. If we cannot tell whether we are stopped, we are stopped.
 func (s *Store) Snapshot(now time.Time) policy.State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	p, err := load(s.path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "CRITICAL: cannot read state at %s, so the gateway is treating itself as stopped: %v\n", s.path, err)
+		return policy.State{
+			KillSwitch: true,
+			KilledAt:   now,
+			Spent:      map[string]int64{},
+			Calls:      map[string]int{},
+		}
+	}
+
 	st := policy.State{
-		KillSwitch:  s.p.KillSwitch,
-		KilledAt:    s.p.KilledAt,
-		Tainted:     s.p.Tainted,
-		TaintedAt:   s.p.TaintedAt,
-		TaintSource: s.p.TaintSource,
+		KillSwitch:  p.KillSwitch,
+		KilledAt:    p.KilledAt,
+		Tainted:     p.Tainted,
+		TaintedAt:   p.TaintedAt,
+		TaintSource: p.TaintSource,
 		Spent:       map[string]int64{},
 		Calls:       map[string]int{},
 	}
-	if s.p.SpendDay == day(now) {
-		for k, v := range s.p.Spent {
+	if p.SpendDay == day(now) {
+		for k, v := range p.Spent {
 			st.Spent[k] = v
 		}
 	}
-	if s.p.CallHour == hour(now) {
-		for k, v := range s.p.Calls {
+	if p.CallHour == hour(now) {
+		for k, v := range p.Calls {
 			st.Calls[k] = v
 		}
 	}
@@ -140,12 +185,27 @@ func (s *Store) RecordSpend(capKey string, minor int64, now time.Time) error {
 	})
 }
 
+// update is read-modify-write against the file, not against a cached struct.
+// Reading first is what stops this process from clobbering a change another
+// one made — most importantly a kill switch set by chhayactl while the daemon
+// was running. mu makes the cycle atomic within this process; between
+// processes it narrows the window to the few microseconds between the read
+// and the rename rather than closing it, which is the right trade for a
+// two-writer system where one writer is a human typing a command.
+//
+// A read that fails is a refused write: we will not overwrite a state file we
+// could not understand, because what we cannot read might say we are stopped.
 func (s *Store) update(f func(*persisted)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	f(&s.p)
-	s.p.V = stateVersion
-	return s.flush()
+
+	p, err := load(s.path)
+	if err != nil {
+		return err
+	}
+	f(&p)
+	p.V = stateVersion
+	return s.flush(p)
 }
 
 // flush writes atomically and durably. Both halves matter: a half-written
@@ -153,8 +213,8 @@ func (s *Store) update(f func(*persisted)) error {
 // os.WriteFile would only reach the page cache, so a crash just after the
 // rename could leave the target present with stale bytes — the exact failure
 // the temp-file dance is supposed to prevent. Hence the explicit Sync.
-func (s *Store) flush() error {
-	b, err := json.Marshal(s.p)
+func (s *Store) flush(p persisted) error {
+	b, err := json.Marshal(p)
 	if err != nil {
 		return err
 	}
