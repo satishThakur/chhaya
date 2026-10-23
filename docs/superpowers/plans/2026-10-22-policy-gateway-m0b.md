@@ -3124,12 +3124,21 @@ func (f *fakeTG) SendMessage(_ context.Context, _ int64, text string, _ [][]Butt
 	f.sent = append(f.sent, text)
 	id := int64(len(f.sent))
 	f.mu.Unlock()
+	return id, nil
+}
+
+// AttachKeyboard is where the fake produces its tap, because that is the
+// point at which the real bot has a message id and a matching token.
+func (f *fakeTG) AttachKeyboard(_ context.Context, _ int64, messageID int64, _ [][]Button) error {
+	if f.sendErr != nil {
+		return f.sendErr
+	}
 	if f.reply != nil {
-		if u := f.reply(id); u != nil {
+		if u := f.reply(messageID); u != nil {
 			f.out <- *u
 		}
 	}
-	return id, nil
+	return nil
 }
 
 func (f *fakeTG) AnswerCallback(_ context.Context, id, _ string) error {
@@ -3261,8 +3270,11 @@ func TestApprovalTimeoutDenies(t *testing.T) {
 func TestApprovalTapIsHonoured(t *testing.T) {
 	tg := newFakeTG()
 	tg.reply = func(messageID int64) *Update {
+		// Message must be populated: tap() keys the pending approval off
+		// c.Message.ID, and a Callback without it is silently dropped.
 		return &Update{ID: messageID, Callback: &Callback{
 			ID: "cb1", From: User{ID: allowedUser}, Data: "approve:" + callbackToken(messageID),
+			Message: &Message{ID: messageID, Chat: Chat{ID: allowedUser}},
 		}}
 	}
 	b, _, _ := newTestBot(t, tg, 2*time.Second)
@@ -3426,6 +3438,10 @@ type Telegram interface {
 	GetMe(ctx context.Context) (botID int64, username string, err error)
 	GetChat(ctx context.Context, chatID int64) error
 	SendMessage(ctx context.Context, chatID int64, text string, buttons [][]Button) (messageID int64, err error)
+	// AttachKeyboard adds an inline keyboard to a message already sent. The
+	// callback token is derived from the message id, which does not exist
+	// until the message does — so the keyboard cannot go out with it.
+	AttachKeyboard(ctx context.Context, chatID, messageID int64, buttons [][]Button) error
 	AnswerCallback(ctx context.Context, callbackID, text string) error
 	GetUpdates(ctx context.Context, offset int64, timeout time.Duration) ([]Update, error)
 }
@@ -3500,15 +3516,7 @@ func (t *httpTG) GetChat(ctx context.Context, chatID int64) error {
 func (t *httpTG) SendMessage(ctx context.Context, chatID int64, text string, buttons [][]Button) (int64, error) {
 	body := map[string]any{"chat_id": chatID, "text": text, "parse_mode": "HTML"}
 	if len(buttons) > 0 {
-		rows := make([][]map[string]string, 0, len(buttons))
-		for _, row := range buttons {
-			r := make([]map[string]string, 0, len(row))
-			for _, b := range row {
-				r = append(r, map[string]string{"text": b.Text, "callback_data": b.Data})
-			}
-			rows = append(rows, r)
-		}
-		body["reply_markup"] = map[string]any{"inline_keyboard": rows}
+		body["reply_markup"] = map[string]any{"inline_keyboard": keyboard(buttons)}
 	}
 	var msg Message
 	if err := t.call(ctx, "sendMessage", body, &msg); err != nil {
@@ -3517,8 +3525,27 @@ func (t *httpTG) SendMessage(ctx context.Context, chatID int64, text string, but
 	return msg.ID, nil
 }
 
+func (t *httpTG) AttachKeyboard(ctx context.Context, chatID, messageID int64, buttons [][]Button) error {
+	return t.call(ctx, "editMessageReplyMarkup", map[string]any{
+		"chat_id": chatID, "message_id": messageID,
+		"reply_markup": map[string]any{"inline_keyboard": keyboard(buttons)},
+	}, nil)
+}
+
 func (t *httpTG) AnswerCallback(ctx context.Context, id, text string) error {
 	return t.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": id, "text": text}, nil)
+}
+
+func keyboard(buttons [][]Button) [][]map[string]string {
+	rows := make([][]map[string]string, 0, len(buttons))
+	for _, row := range buttons {
+		r := make([]map[string]string, 0, len(row))
+		for _, b := range row {
+			r = append(r, map[string]string{"text": b.Text, "callback_data": b.Data})
+		}
+		rows = append(rows, r)
+	}
+	return rows
 }
 
 func (t *httpTG) GetUpdates(ctx context.Context, offset int64, timeout time.Duration) ([]Update, error) {
@@ -3737,6 +3764,12 @@ func (b *Bot) tap(ctx context.Context, c *Callback) {
 func (b *Bot) Request(ctx context.Context, call mcpsrv.ToolCall, d policy.Decision) (bool, time.Duration, error) {
 	start := time.Now()
 
+	// ONE message carrying both the card and its keyboard. Two messages would
+	// put the buttons on a different message id than the token was minted
+	// from, so every tap would read as expired — and two notifications per
+	// approval is noise on a bot whose messages must stay worth reading.
+	// The token cannot be minted before the id exists, so it is sent empty
+	// and the keyboard is attached by editing the message we just posted.
 	text := b.card(call, d)
 	msgID, err := b.tg.SendMessage(ctx, b.chatID, text, nil)
 	if err != nil {
@@ -3744,13 +3777,12 @@ func (b *Bot) Request(ctx context.Context, call mcpsrv.ToolCall, d policy.Decisi
 		// record and tell Hermes the channel is down.
 		return false, time.Since(start), fmt.Errorf("could not send the approval card: %w", err)
 	}
-
 	tok := callbackToken(msgID)
-	if _, err := b.tg.SendMessage(ctx, b.chatID, "approve?", [][]Button{{
+	if err := b.tg.AttachKeyboard(ctx, b.chatID, msgID, [][]Button{{
 		{Text: "✅ approve", Data: "approve:" + tok},
 		{Text: "❌ deny", Data: "deny:" + tok},
 	}}); err != nil {
-		return false, time.Since(start), fmt.Errorf("could not send the approval buttons: %w", err)
+		return false, time.Since(start), fmt.Errorf("could not attach the approval buttons: %w", err)
 	}
 
 	p := &pending{ch: make(chan bool, 1), rule: d.RuleID, tool: call.Name, start: start}
