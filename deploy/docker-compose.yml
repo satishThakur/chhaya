@@ -1,0 +1,42 @@
+# The gateway owns its own lifecycle. It is NOT a child of Hermes: as a child
+# process, Hermes would own the lifecycle of the process holding the kill
+# switch, and Hermes strips credential-named env vars from MCP subprocesses.
+services:
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.gateway
+    env_file: .env.gateway        # NEVER .env.hermes — chhayad refuses to start if it sees that file's variables
+    environment:
+      CHHAYA_DATA_DIR: /data
+      CHHAYA_POLICY_FILE: /etc/chhaya/policy.yaml
+      CHHAYA_MEMORY_ROOT: /data/memory
+      CHHAYA_LISTEN: 0.0.0.0:8443
+      CHHAYA_TLS_CERT: /etc/chhaya/certs/gateway.crt
+      CHHAYA_TLS_KEY: /etc/chhaya/certs/gateway.key
+      CHHAYA_TLS_CA: /etc/chhaya/certs/ca.crt
+    volumes:
+      - gateway-data:/data
+      - ../config/policy.yaml:/etc/chhaya/policy.yaml:ro
+      - ./certs:/etc/chhaya/certs:ro
+    ports:
+      - "127.0.0.1:8443:8443"     # localhost only; nothing about this is internet-facing
+    restart: unless-stopped
+
+  hermes:
+    image: nousresearch/hermes-agent@sha256:1d33f6087fab79d580ffaec34ceed825e11d7bb8e803206be75a56d027c62538
+    env_file: .env.hermes         # exactly one secret: Hermes' own bot token
+    volumes:
+      - hermes-data:/data         # NOT :ro — Hermes creates cron/ at init and fails on a read-only home
+      - ./certs/ca.crt:/certs/ca.crt:ro
+      - ./certs/hermes.crt:/certs/hermes.crt:ro
+      - ./certs/hermes.key:/certs/hermes.key:ro
+    environment:
+      HERMES_HOME: /data
+    depends_on:
+      - gateway
+    restart: unless-stopped
+
+volumes:
+  gateway-data:
+  hermes-data:
