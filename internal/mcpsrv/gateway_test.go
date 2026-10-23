@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -755,4 +756,240 @@ func TestAPanickingApproverIsRefusedAndAudited(t *testing.T) {
 			t.Error("the record should carry the panic as the result error")
 		}
 	})
+}
+
+// TestNoPathToAHandlerAnywhereInTheModule widens the registry invariant from
+// this package to the whole module. The registry type is unexported, but
+// tools.All is exported and returns Registrations with live handlers, so
+// `tools.All(d)[2].Handle(ctx, args)` reached memory.propose_update from any
+// package in the module with no Decide and no Append — no edit to this
+// package required. The spec's claim is about the module, so the test has to
+// be too.
+//
+// Receivers are resolved, not string-matched: cmd/chhayad and the e2e call
+// mux.Handle on an *http.ServeMux, which is a different Handle entirely. Any
+// receiver this test cannot prove is a ServeMux is reported, so the failure
+// mode is a false alarm a human reads, never a silent pass.
+//
+// What it does not catch: `h := reg.Handle` followed by `h(ctx, args)`. That
+// needs type resolution across statements; the direct call is the shape this
+// is guarding, and the indirection would have to be written on purpose.
+func TestNoPathToAHandlerAnywhereInTheModule(t *testing.T) {
+	root := moduleRoot(t)
+
+	// path (relative to the module root) → the only function in it that may
+	// call a handler. An empty function name means the whole file may.
+	allowed := map[string]string{
+		"internal/mcpsrv/gateway.go":   "dispatch",
+		"internal/tools/tools_test.go": "", // unit-tests the handlers themselves
+	}
+
+	var parsed int
+	err := filepath.WalkDir(root, func(path string, de os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if de.IsDir() {
+			if name := de.Name(); name == ".git" || name == "bin" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return fmt.Errorf("%s: %w", rel, err)
+		}
+		parsed++
+
+		fileMuxes := packageLevelServeMuxNames(f)
+		for _, call := range handleCalls(f) {
+			fn := enclosingFunc(f, call.pos)
+
+			// A receiver counts as an *http.ServeMux only if this function —
+			// or the file's own declarations — says so. A plain identifier
+			// named "mux" somewhere else in the file proves nothing about
+			// this one.
+			muxes := fileMuxes
+			if fn != nil {
+				muxes = union(fileMuxes, serveMuxNames(fn, true))
+			}
+			if id, ok := call.recv.(*ast.Ident); ok && muxes[id.Name] {
+				continue // http.ServeMux.Handle, a different method entirely
+			}
+			if want, ok := allowed[filepath.ToSlash(rel)]; ok && (want == "" || want == funcName(fn)) {
+				continue
+			}
+			t.Errorf("%s:%d: %s calls a tool handler directly; every call must go through Gateway.Invoke",
+				rel, fset.Position(call.pos).Line, orDefault(funcName(fn), "a declaration"))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A walk that silently matched nothing would be the most comfortable way
+	// for this test to go green, so say out loud how much it looked at.
+	if parsed < 20 {
+		t.Fatalf("only %d Go files were walked; the module has more than that, so the walk is not covering it", parsed)
+	}
+}
+
+type handleCall struct {
+	recv ast.Expr
+	pos  token.Pos
+}
+
+// handleCalls finds every `X.Handle(...)` call in the file.
+func handleCalls(f *ast.File) []handleCall {
+	var out []handleCall
+	ast.Inspect(f, func(n ast.Node) bool {
+		c, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if sel, ok := c.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Handle" {
+			out = append(out, handleCall{recv: sel.X, pos: sel.Sel.Pos()})
+		}
+		return true
+	})
+	return out
+}
+
+// serveMuxNames collects the identifiers in scope that hold an *http.ServeMux:
+// assigned from http.NewServeMux(), declared as *http.ServeMux, or — when
+// withParams is set, i.e. when scope is one function — taken as a parameter of
+// that type. This is what lets the walk tell net/http's Handle apart from a
+// tool handler's by the receiver rather than by its spelling. Anything it
+// cannot prove stays unproven and gets reported.
+func serveMuxNames(scope ast.Node, withParams bool) map[string]bool {
+	out := map[string]bool{}
+	isNewServeMux := func(e ast.Expr) bool {
+		c, ok := e.(*ast.CallExpr)
+		if !ok {
+			return false
+		}
+		sel, ok := c.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		return ok && pkg.Name == "http" && sel.Sel.Name == "NewServeMux"
+	}
+	isServeMuxPtr := func(e ast.Expr) bool {
+		star, ok := e.(*ast.StarExpr)
+		if !ok {
+			return false
+		}
+		sel, ok := star.X.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		return ok && pkg.Name == "http" && sel.Sel.Name == "ServeMux"
+	}
+	ast.Inspect(scope, func(n ast.Node) bool {
+		switch d := n.(type) {
+		case *ast.AssignStmt:
+			for i, rhs := range d.Rhs {
+				if i < len(d.Lhs) && isNewServeMux(rhs) {
+					if id, ok := d.Lhs[i].(*ast.Ident); ok {
+						out[id.Name] = true
+					}
+				}
+			}
+		case *ast.ValueSpec:
+			declared := isServeMuxPtr(d.Type)
+			for i, name := range d.Names {
+				if declared || (i < len(d.Values) && isNewServeMux(d.Values[i])) {
+					out[name.Name] = true
+				}
+			}
+		case *ast.FuncType:
+			if !withParams || d.Params == nil {
+				return true
+			}
+			for _, field := range d.Params.List {
+				if !isServeMuxPtr(field.Type) {
+					continue
+				}
+				for _, name := range field.Names {
+					out[name.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// packageLevelServeMuxNames looks only at the file's var declarations, never
+// inside a function body: a local named "mux" in one function says nothing
+// about an identifier of the same name in another.
+func packageLevelServeMuxNames(f *ast.File) map[string]bool {
+	out := map[string]bool{}
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.VAR {
+			continue
+		}
+		for k := range serveMuxNames(gd, false) {
+			out[k] = true
+		}
+	}
+	return out
+}
+
+func union(a, b map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(a)+len(b))
+	for k := range a {
+		out[k] = true
+	}
+	for k := range b {
+		out[k] = true
+	}
+	return out
+}
+
+func enclosingFunc(f *ast.File, pos token.Pos) *ast.FuncDecl {
+	var found *ast.FuncDecl
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Pos() <= pos && pos <= fn.End() {
+			found = fn
+		}
+	}
+	return found
+}
+
+func funcName(fn *ast.FuncDecl) string {
+	if fn == nil {
+		return ""
+	}
+	return fn.Name.Name
+}
+
+func moduleRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("no go.mod above the test's working directory")
+		}
+		dir = parent
+	}
 }

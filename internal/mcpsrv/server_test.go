@@ -58,17 +58,12 @@ func TestCheckEnvironmentIsolation(t *testing.T) {
 	}
 }
 
-// MCPHandler reads the registry to publish schemas, but must reach handlers
-// only through Invoke. Assert that its body never calls reg.Handle.
-func TestMCPHandlerDoesNotCallHandlersDirectly(t *testing.T) {
-	src, err := os.ReadFile("server.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(src), ".Handle(") {
-		t.Fatal("server.go calls a handler directly; it must go through Invoke")
-	}
-}
+// The substring check that used to live here — "server.go must not contain
+// .Handle(" — is now TestNoPathToAHandlerAnywhereInTheModule, which covers
+// server.go along with every other file in the module and tells a tool
+// handler's Handle apart from net/http's by the receiver. The substring form
+// would have gone red the first time server.go routed anything through an
+// http.ServeMux, which is a plausible thing for the HTTP layer to do.
 
 // TestUnparseableArgumentsAreRefusedAndAuditedThroughInvoke proves the fix for
 // the bug where MCPHandler refused a call with bad arguments before ever
