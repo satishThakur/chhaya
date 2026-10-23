@@ -17,6 +17,12 @@ import (
 
 var errUnreachable = errors.New("approver unreachable")
 
+// approvalBackstopMargin is added to cfg.ApprovalTimeout to bound the
+// approver call in Invoke. It is a var rather than a literal only so a test
+// can shrink it to prove the backstop actually ends a hung approver without
+// the test itself taking 30+ seconds; production code must never change it.
+var approvalBackstopMargin = 30 * time.Second
+
 // Approver asks the human. It is an interface so that internal/mcpsrv does not
 // depend on Telegram, and so the tests above need no network.
 type Approver interface {
@@ -120,7 +126,7 @@ func (g *Gateway) Invoke(ctx context.Context, call ToolCall) ToolResult {
 		// request and never answers at all: deliberately longer, so the
 		// normal path still produces the approver's own record rather than
 		// this one.
-		apCtx, cancel := context.WithTimeout(ctx, g.cfg.ApprovalTimeout+30*time.Second)
+		apCtx, cancel := context.WithTimeout(ctx, g.cfg.ApprovalTimeout+approvalBackstopMargin)
 		defer cancel()
 		approved, latency, err := g.approver.Request(apCtx, call, d)
 		if err != nil {

@@ -151,7 +151,11 @@ func newTestGateway(t *testing.T, ap Approver) (*Gateway, *int) {
 			// TestRegistrationsExposesNoHandlers has a non-nil Validate to
 			// prove gets stripped.
 			Validate: func(map[string]any) error { return nil },
-			Handle:   func(context.Context, map[string]any) (any, error) { *called++; return "write-ok", nil },
+			// A declared (non-secretish-named) redaction path, so
+			// TestMutatingRegistrationsCannotDisableRedaction has something
+			// to try to disable.
+			Redact: []string{"redact_me"},
+			Handle: func(context.Context, map[string]any) (any, error) { *called++; return "write-ok", nil },
 		},
 		{
 			Name: "probe.untrusted", Description: "returns untrusted content", Tier: policy.TierInternal,
@@ -411,6 +415,53 @@ func TestApproverIsNotConsultedOnAnAllowPath(t *testing.T) {
 	}
 }
 
+// hangingApprover never answers: Request blocks until its context is done and
+// then reports that as an error. It exists to prove the backstop in Invoke
+// bounds the approver call — nothing else in this approver would ever return.
+type hangingApprover struct{ released chan struct{} }
+
+func (h *hangingApprover) Request(ctx context.Context, _ ToolCall, _ policy.Decision) (bool, time.Duration, error) {
+	<-ctx.Done()
+	return false, 0, ctx.Err()
+}
+
+// TestAHungApproverCannotBlockForever is the regression test for the
+// Important finding that nothing bounded g.approver.Request: an approver that
+// accepts the request and never answers would block Invoke forever, which is
+// neither allow nor refuse — the one state "fail closed" exists to exclude.
+//
+// It shrinks both cfg.ApprovalTimeout and the package-level
+// approvalBackstopMargin so the test runs in milliseconds rather than the
+// production 30-second margin; approvalBackstopMargin only exists as a
+// package var (rather than the literal `30 * time.Second` inline) so this
+// test can do that without touching what ships.
+func TestAHungApproverCannotBlockForever(t *testing.T) {
+	g, _ := newTestGateway(t, &hangingApprover{})
+	g.cfg.ApprovalTimeout = 20 * time.Millisecond
+
+	savedMargin := approvalBackstopMargin
+	approvalBackstopMargin = 20 * time.Millisecond
+	t.Cleanup(func() { approvalBackstopMargin = savedMargin })
+
+	if err := g.state.SetTaint(true, "probe.untrusted", g.now()); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan ToolResult, 1)
+	go func() {
+		done <- g.Invoke(context.Background(), ToolCall{Actor: "hermes", Name: "probe.write"})
+	}()
+
+	select {
+	case res := <-done:
+		if !res.IsError {
+			t.Fatal("a hung approver must produce a refusal, never an allow")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Invoke did not return — a hung approver blocked forever, which is neither allow nor refuse")
+	}
+}
+
 // TestSecretishArgsNeverReachTheAuditLog checks CLAUDE.md's "secrets come
 // from env only, never log them" at the one place this package touches it:
 // the raw bytes record() hands to audit.Append. It reads the log file
@@ -428,6 +479,36 @@ func TestSecretishArgsNeverReachTheAuditLog(t *testing.T) {
 	}
 	if strings.Contains(string(b), secret) {
 		t.Fatal("a secret-shaped argument reached the audit log")
+	}
+}
+
+// TestMutatingRegistrationsCannotDisableRedaction is the regression test for
+// the Important finding that Registrations() handed out live aliases of
+// Redact and Schema: a caller mutating the slice it got back could silently
+// disable a declared redaction path for every later call, since record()
+// reads reg.Redact fresh from the registry on each Invoke.
+func TestMutatingRegistrationsCannotDisableRedaction(t *testing.T) {
+	g, _ := newTestGateway(t, &fakeApprover{approve: true})
+
+	for _, r := range g.Registrations() {
+		for i := range r.Redact {
+			r.Redact[i] = "not-a-real-path"
+		}
+		if len(r.Schema) > 0 {
+			r.Schema[0] = ' '
+		}
+	}
+
+	// probe.write declares Redact: []string{"redact_me"} in newTestGateway.
+	g.Invoke(context.Background(), ToolCall{Actor: "hermes", Name: "probe.write",
+		Args: map[string]any{"redact_me": "SHOULD-NOT-APPEAR"}})
+
+	raw, err := os.ReadFile(g.auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "SHOULD-NOT-APPEAR") {
+		t.Fatal("mutating the slice returned by Registrations disabled a declared redaction path")
 	}
 }
 
