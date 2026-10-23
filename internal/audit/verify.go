@@ -4,13 +4,25 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 )
 
 // Verify walks the chain from the genesis record and reports how many records
 // it checked. It shares no state with Writer on purpose — chhayactl runs it in
 // a different process, so a compromised daemon cannot also be the auditor.
+// A missing log is not an intact one. readAll deliberately returns (nil, nil)
+// for a missing file because Open's tail() needs that for a fresh start — but
+// a caller who asked us to VERIFY a log and has no log must be told so, not
+// reassured.
 func Verify(path string) (int, error) {
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return 0, fmt.Errorf("no audit log at %s: %w", path, fs.ErrNotExist)
+		}
+		return 0, err
+	}
+
 	recs, err := readAll(path)
 	if err != nil {
 		return 0, err
