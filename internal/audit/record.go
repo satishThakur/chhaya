@@ -39,12 +39,19 @@ type Taint struct {
 }
 
 type Approval struct {
-	Answer    string `json:"answer"` // approved | denied_by_user | timeout
+	// Answer is one of: approved, denied_by_user (both written by whatever
+	// relayed the human's answer), timeout (written by the approver bot's own
+	// timeout, not this package), or channel_failed (written by
+	// mcpsrv.Gateway when the approver could not be reached at all).
+	Answer    string `json:"answer"`
 	LatencyMS int64  `json:"latency_ms"`
 }
 
 type Result struct {
-	Status string `json:"status"` // ok | refused | error
+	// Status is one of: ok, refused, error (all written by mcpsrv.Gateway
+	// once a call has finished), or pending (written by mcpsrv.Gateway for
+	// the first of an approval's two records, before the human has answered).
+	Status string `json:"status"`
 	Error  string `json:"error,omitempty"`
 }
 

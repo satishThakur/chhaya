@@ -1,9 +1,11 @@
 package mcpsrv
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/satishthakur/chhaya/internal/policy"
 )
@@ -34,7 +36,7 @@ type Registration struct {
 	Kind        policy.Kind
 	Trust       Trust
 	Schema      json.RawMessage
-	Validate    Validator // consulted for tier 1 only
+	Validate    Validator // consulted whenever supplied; required for tier 1
 	CapKey      string    // names the spending cap this tool draws on
 	Redact      []string  // arg paths never written to the log
 	Handle      Handler
@@ -60,12 +62,22 @@ func buildRegistry(regs []Registration) (registry, error) {
 			return nil, fmt.Errorf("%s: tier 3 actions are never exposed; do not register one", r.Name)
 		case r.Tier < policy.TierInternal || r.Tier > policy.TierMoney:
 			return nil, fmt.Errorf("%s: tier %d is not a tier", r.Name, r.Tier)
+		case r.Tier == policy.TierMoney:
+			return nil, fmt.Errorf("%s: tier 2 is not registerable yet — per-order and daily caps are not wired "+
+				"into Invoke (policy.Request.AmountMinor is never set and state.RecordSpend is never called), so "+
+				"a money tool would be protected by the approval card alone. Wire the caps first", r.Name)
 		case r.Tier == policy.TierReversible && r.Validate == nil:
 			return nil, fmt.Errorf("%s: a tier-1 tool must supply a validator", r.Name)
 		}
 		if _, dup := out[r.Name]; dup {
 			return nil, fmt.Errorf("%s: registered twice", r.Name)
 		}
+		// Clone the mutable fields on the way in: the caller of New keeps its
+		// own reference to the slice or byte slice it built the registration
+		// from, and a mutation through that reference after registration must
+		// not be able to reach what the gateway reads on every later call.
+		r.Schema = bytes.Clone(r.Schema)
+		r.Redact = slices.Clone(r.Redact)
 		out[r.Name] = r
 	}
 	return out, nil
