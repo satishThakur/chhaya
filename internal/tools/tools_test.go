@@ -186,3 +186,66 @@ func TestCapabilitiesReportsStateHonestly(t *testing.T) {
 		t.Errorf("remaining = %v, want 1100", caps["remaining_today_inr"])
 	}
 }
+
+func TestCapabilitiesClampsCapsToZero(t *testing.T) {
+	d := deps(t)
+	// Spend more than the daily cap
+	d.State.RecordSpend("food", 200000, time.Now())
+
+	out, err := find(t, All(d), "capabilities").Handle(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := out.(map[string]any)
+	caps := m["caps"].(map[string]any)["food"].(map[string]any)
+	if caps["remaining_today_inr"] != int64(0) {
+		t.Errorf("remaining = %v, want 0 (clamped); never negative", caps["remaining_today_inr"])
+	}
+}
+
+func TestMemoryGetCannotBeEscapedBySymlink(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "taste"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(root, "taste", "food.md"), []byte("# Food\n"), 0o600)
+	os.WriteFile(filepath.Join(outside, "loot.md"), []byte("TOP-SECRET"), 0o600)
+
+	// A link to a file outside, and a link to a directory outside.
+	if err := os.Symlink(filepath.Join(outside, "loot.md"), filepath.Join(root, "link.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, rel := range []string{
+		"link",                // final component is a symlink out, target exists
+		"escape/loot",         // parent is a symlink out, target exists
+		"escape/nope",         // parent is a symlink out, target ABSENT
+		"taste/food/../../..", // Clean fuses this into a filename; must still refuse
+		".",
+	} {
+		t.Run(rel, func(t *testing.T) {
+			if p, err := memoryPath(root, rel); err == nil {
+				t.Fatalf("%q escaped the memory root, resolved to %q", rel, p)
+			}
+		})
+	}
+
+	// A legitimate path that happens to contain traversal must still work.
+	if _, err := memoryPath(root, "taste/../taste/food"); err != nil {
+		t.Fatalf("a path that stays inside the root was refused: %v", err)
+	}
+}
+
+func TestProposeUpdateRefusesOutOfRootPath(t *testing.T) {
+	d := deps(t)
+	h := find(t, All(d), "memory.propose_update").Handle
+	if _, err := h(context.Background(), map[string]any{
+		"path": "../../../etc/passwd", "diff": "+x", "rationale": "nope",
+	}); err == nil {
+		t.Fatal("propose_update must refuse out-of-root paths just like memory.get")
+	}
+}
