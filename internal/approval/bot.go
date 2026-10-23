@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"os"
 	"strings"
 	"sync"
@@ -326,7 +327,7 @@ func (b *Bot) Request(ctx context.Context, call mcpsrv.ToolCall, d policy.Decisi
 		// A timeout needs a trace as loud as a tap, and it is this package's
 		// event, not Invoke's: Invoke only sees "not approved".
 		b.appendRecord(audit.Record{
-			Actor: "approver", Tool: call.Name, Kind: "write", Tier: int(d.Tier),
+			Actor: "approver", Tool: call.Name, Kind: d.Kind.String(), Tier: int(d.Tier),
 			Args: audit.MarshalArgs(map[string]any{}), Decision: "deny", Rule: d.RuleID,
 			Reason:   "no answer within " + b.timeout.String(),
 			Approval: &audit.Approval{Answer: "timeout", LatencyMS: time.Since(start).Milliseconds()},
@@ -349,18 +350,31 @@ func (b *Bot) Request(ctx context.Context, call mcpsrv.ToolCall, d policy.Decisi
 	}
 }
 
+// card renders the approval message. SendMessage posts it with
+// parse_mode: HTML, so every interpolated value is escaped here, explicitly.
+//
+// The args are agent-controlled and the rest is not much better — a rule id
+// or reason can carry a tool name the agent chose. Unescaped, an argument
+// containing "</code><b>tool: memory.get</b>" would close the code span and
+// forge a line the human reads as the gateway's own, approving something
+// other than what they were shown. Escaping here and not relying on the
+// marshaller is the point: json.Marshal happens to escape HTML today, and
+// audit.MarshalArgs deliberately does not, so a cleanup that unified the two
+// would otherwise reopen this.
 func (b *Bot) card(call mcpsrv.ToolCall, d policy.Decision) string {
 	var sb strings.Builder
 	sb.WriteString("<b>approval needed</b>\n")
-	fmt.Fprintf(&sb, "tool: <code>%s</code>\n", call.Name)
+	fmt.Fprintf(&sb, "tool: <code>%s</code>\n", html.EscapeString(call.Name))
 	fmt.Fprintf(&sb, "tier: %d\n", d.Tier)
-	fmt.Fprintf(&sb, "rule: <code>%s</code>\n", d.RuleID)
+	fmt.Fprintf(&sb, "rule: <code>%s</code>\n", html.EscapeString(d.RuleID))
 	if d.Reason != "" {
-		fmt.Fprintf(&sb, "why: %s\n", d.Reason)
+		fmt.Fprintf(&sb, "why: %s\n", html.EscapeString(d.Reason))
 	}
 	if len(call.Args) > 0 {
 		shown, _ := json.Marshal(audit.Redact(call.Args, d.Redact))
-		fmt.Fprintf(&sb, "args: <code>%s</code>", truncate(string(shown), 500))
+		// Truncate first, then escape: escaping first could leave the cut in
+		// the middle of an entity like &lt;, which renders as literal "&l".
+		fmt.Fprintf(&sb, "args: <code>%s</code>", html.EscapeString(truncate(string(shown), 500)))
 	}
 	return sb.String()
 }

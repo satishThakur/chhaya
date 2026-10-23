@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -403,4 +404,124 @@ func records(t *testing.T, path string) []audit.Record {
 		out = append(out, r)
 	}
 	return out
+}
+
+// tagSequence returns the HTML tags in s, in order. The card is sent with
+// parse_mode: HTML, so this is the structure a human actually reads — and
+// the thing no agent-controlled value may add to.
+func tagSequence(s string) []string {
+	var out []string
+	for {
+		i := strings.Index(s, "<")
+		if i < 0 {
+			return out
+		}
+		j := strings.Index(s[i:], ">")
+		if j < 0 {
+			return append(out, s[i:])
+		}
+		out = append(out, s[i:i+j+1])
+		s = s[i+j+1:]
+	}
+}
+
+// TestTheCardCannotBeForgedByAgentControlledText: the card is HTML, and a
+// human approves on the strength of what it says. If a value the agent
+// controls can close a tag and open its own, it can show the approver
+// "tool: memory.get" over a call that is something else entirely.
+//
+// Only the reason and rule-id cases flip against the pre-fix code; the
+// argument case passed already, but only because card() happened to use
+// json.Marshal, which HTML-escapes by default. audit.MarshalArgs deliberately
+// does not, so the "use one marshaller for both" cleanup a reviewer would ask
+// for is exactly what this case is here to catch.
+func TestTheCardCannotBeForgedByAgentControlledText(t *testing.T) {
+	b, _, _ := newTestBot(t, newFakeTG(), time.Second)
+	const forge = "</code><b>tool: memory.get</b><code>"
+
+	benign := b.card(
+		mcpsrv.ToolCall{Name: "memory.propose_update", Args: map[string]any{"diff": "+ a line"}},
+		policy.Decision{Outcome: policy.NeedApproval, Tier: policy.TierReversible, RuleID: "taint.write", Reason: "untrusted content entered the session"})
+	want := tagSequence(benign)
+	if len(want) == 0 {
+		t.Fatal("precondition: the card should contain HTML tags at all")
+	}
+
+	cases := map[string]struct {
+		call mcpsrv.ToolCall
+		d    policy.Decision
+	}{
+		"an argument": {
+			mcpsrv.ToolCall{Name: "memory.propose_update", Args: map[string]any{"diff": forge}},
+			policy.Decision{RuleID: "taint.write", Reason: "untrusted content entered the session"},
+		},
+		"the reason": {
+			mcpsrv.ToolCall{Name: "memory.propose_update", Args: map[string]any{"diff": "+ a line"}},
+			policy.Decision{RuleID: "taint.write", Reason: forge},
+		},
+		"the rule id": {
+			mcpsrv.ToolCall{Name: "memory.propose_update", Args: map[string]any{"diff": "+ a line"}},
+			policy.Decision{RuleID: forge, Reason: "untrusted content entered the session"},
+		},
+		"the tool name": {
+			mcpsrv.ToolCall{Name: forge, Args: map[string]any{"diff": "+ a line"}},
+			policy.Decision{RuleID: "taint.write", Reason: "untrusted content entered the session"},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := b.card(tc.call, tc.d)
+			if strings.Contains(got, "<b>tool:") {
+				t.Errorf("%s forged a line the approver reads as the gateway's own:\n%s", name, got)
+			}
+			if gotTags := tagSequence(got); !slices.Equal(gotTags, want) {
+				t.Errorf("%s changed the card's markup.\n got: %v\nwant: %v\ncard:\n%s", name, gotTags, want, got)
+			}
+			if strings.Contains(got, forge) {
+				t.Errorf("%s reached the card as live markup:\n%s", name, got)
+			}
+			// Escaped, not dropped: the approver still gets to see what the
+			// agent actually sent. The two escapes differ — html.EscapeString
+			// writes &lt;, json.Marshal writes \u003c — so assert on the part
+			// neither of them touches.
+			if !strings.Contains(got, "memory.get") {
+				t.Errorf("%s: the hostile text should be escaped, not hidden:\n%s", name, got)
+			}
+		})
+	}
+}
+
+// TestTheTimeoutRecordStatesTheCallsRealKind: the timeout record used to
+// hard-code Kind: "write". Everything else in a record comes from the
+// decision or the registration, and a permanent ledger that calls a read a
+// write is wrong in the same way a wrong tier is.
+func TestTheTimeoutRecordStatesTheCallsRealKind(t *testing.T) {
+	for _, kind := range []policy.Kind{policy.Read, policy.Write} {
+		t.Run(kind.String(), func(t *testing.T) {
+			tg := newFakeTG() // reply is nil: nobody taps
+			b, _, logPath := newTestBot(t, tg, 100*time.Millisecond)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go b.Run(ctx)
+
+			if _, _, err := b.Request(ctx, mcpsrv.ToolCall{Name: "probe.call"},
+				policy.Decision{Outcome: policy.NeedApproval, Tier: policy.TierMoney, Kind: kind,
+					RuleID: "tier2.approval", Reason: "approval required"}); err != nil {
+				t.Fatal(err)
+			}
+
+			recs := records(t, logPath)
+			if len(recs) == 0 {
+				t.Fatal("a timeout needs a trace as loud as a tap")
+			}
+			last := recs[len(recs)-1]
+			if last.Approval == nil || last.Approval.Answer != "timeout" {
+				t.Fatalf("record = %+v, want the timeout record", last)
+			}
+			if last.Kind != kind.String() {
+				t.Errorf("kind = %q, want %q: it must come from the decision, not a literal", last.Kind, kind.String())
+			}
+		})
+	}
 }

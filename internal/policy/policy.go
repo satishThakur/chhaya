@@ -114,7 +114,12 @@ type Config struct {
 type Decision struct {
 	Outcome Outcome
 	Tier    Tier
-	RuleID  string
-	Reason  string
-	Redact  []string
+	// Kind is carried through from the registration, alongside Tier, so that
+	// anything writing an audit record about this decision — including
+	// internal/approval, which never sees the Request — states the call's
+	// real kind instead of assuming one.
+	Kind   Kind
+	RuleID string
+	Reason string
+	Redact []string
 }

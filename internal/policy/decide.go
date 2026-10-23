@@ -9,7 +9,7 @@ import (
 // the security property: each rule can only ever make the answer stricter than
 // the rules below it, so reading top to bottom tells you what cannot happen.
 func Decide(req Request, st State, cfg Config, now time.Time) Decision {
-	d := Decision{Tier: req.Tier}
+	d := Decision{Tier: req.Tier, Kind: req.Kind}
 
 	// 1. Unknown tool. First, so that nothing below can be reached by a name
 	//    the registry never approved.
