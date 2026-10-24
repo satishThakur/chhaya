@@ -133,7 +133,7 @@ exclusion. This is step 7 of the smoke-test checklist in `docs/runbook.md`.
 ### B7 — The gateway could not read its own TLS key
 
 **Severity:** blocker · **Found:** 2026-10-24, first real `make dev-up` · **Area:** `deploy/gen-certs.sh`, `scripts/dev.sh`
-**Fixed:** working tree, not yet committed
+**Fixed:** `0fdc5f3`
 
 `gen-certs.sh` ended with `chmod 600 ./*.key`, leaving `gateway.key` owned by the host
 user (uid 1000) while `Dockerfile.gateway` runs the gateway as uid 10001. Bind mounts do
