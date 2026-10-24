@@ -130,4 +130,23 @@ exclusion. This is step 7 of the smoke-test checklist in `docs/runbook.md`.
 
 ## Closed
 
-*(nothing yet — items move here with the commit that fixed them)*
+### B7 — The gateway could not read its own TLS key
+
+**Severity:** blocker · **Found:** 2026-10-24, first real `make dev-up` · **Area:** `deploy/gen-certs.sh`, `scripts/dev.sh`
+**Fixed:** working tree, not yet committed
+
+`gen-certs.sh` ended with `chmod 600 ./*.key`, leaving `gateway.key` owned by the host
+user (uid 1000) while `Dockerfile.gateway` runs the gateway as uid 10001. Bind mounts do
+not remap ownership, so the container saw `1000:1000 0600` and `chhayad` died on
+`load server keypair: permission denied` — crash-looped by `restart: unless-stopped`.
+
+Reproduced as uid 10001 against the real mount (`READ DENIED`), fixed, and re-probed
+(`READ OK`). `gen-certs.sh` now grants that uid read on the key and traverse on the certs
+directory, reading the uid out of `Dockerfile.gateway` so the two cannot drift again, and
+reads the ACL back to prove it applied. `make dev-doctor` checks the same property, because
+`gen-certs.sh` refuses to re-run over existing certificates and so cannot reach any install
+made before this change.
+
+Full reasoning, including why an ACL rather than `chmod 0644` or `chgrp`, is in
+`docs/decisions.md`, 2026-10-24.
+

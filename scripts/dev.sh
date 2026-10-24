@@ -28,6 +28,39 @@ has_key() { grep -qE "^${2}=.+" "$1" 2>/dev/null; }
 # mentions FILE KEY -> true if KEY appears at all, even empty
 mentions() { grep -qE "^${2}=" "$1" 2>/dev/null; }
 
+# The uid the gateway container runs as, read from the Dockerfile so this file
+# and that one cannot drift. Empty if the adduser line ever changes shape.
+gateway_uid() { sed -n 's/^RUN adduser .*-u \([0-9][0-9]*\).*/\1/p' "$DEPLOY/Dockerfile.gateway" 2>/dev/null | head -1; }
+
+# readable_by FILE UID -> true if that uid can read the file, by any of the three
+# routes that work: an ACL entry, a matching group with the group bit set, or
+# world-readable. Bind mounts pass ownership through unremapped, so what the host
+# says here is exactly what the container sees.
+readable_by() {
+  local f="$1" uid="$2" mode
+  getfacl -p "$f" 2>/dev/null | grep -qE "^user:${uid}:r" && return 0
+  mode="$(stat -c '%a' "$f" 2>/dev/null)" || return 1
+  case "${mode: -1}" in 4|5|6|7) return 0 ;; esac
+  if [ "$(stat -c '%g' "$f" 2>/dev/null)" = "$uid" ]; then
+    case "${mode: -2:1}" in 4|5|6|7) return 0 ;; esac
+  fi
+  return 1
+}
+
+# traversable_by DIR UID -> true if that uid has +x on the directory. A correct
+# ACL on the key is not enough on its own; without traverse the open fails the
+# same way, which is a confusing half-hour if you are only looking at the file.
+traversable_by() {
+  local d="$1" uid="$2" mode
+  getfacl -p "$d" 2>/dev/null | grep -qE "^user:${uid}:..x" && return 0
+  mode="$(stat -c '%a' "$d" 2>/dev/null)" || return 1
+  case "${mode: -1}" in 1|3|5|7) return 0 ;; esac
+  if [ "$(stat -c '%g' "$d" 2>/dev/null)" = "$uid" ]; then
+    case "${mode: -2:1}" in 1|3|5|7) return 0 ;; esac
+  fi
+  return 1
+}
+
 preflight() {
   local fail=0
 
@@ -73,6 +106,31 @@ preflight() {
     red "missing certificates: ${missing[*]}"
     red "run: make dev-certs"
     fail=1
+  fi
+
+  # --- the gateway can actually read its own key ---------------------------
+  # gen-certs.sh grants this at generation time, but it refuses to re-run over
+  # existing certs — so every install made before that grant existed lands here.
+  # Without this check the symptom is `restart: unless-stopped` crash-looping on
+  # "load server keypair: permission denied", which reads like a TLS problem and
+  # is not one.
+  local guid; guid="$(gateway_uid)"
+  if [ -z "$guid" ]; then
+    ylw "could not read the gateway uid from deploy/Dockerfile.gateway — skipping the key-readability check"
+  elif [ -f "$DEPLOY/certs/gateway.key" ]; then
+    if ! traversable_by "$DEPLOY/certs" "$guid"; then
+      red "deploy/certs is not traversable by uid $guid, which is what the gateway runs as."
+      red "Fix it with:"
+      red "  setfacl -m u:${guid}:x $DEPLOY/certs"
+      fail=1
+    fi
+    if ! readable_by "$DEPLOY/certs/gateway.key" "$guid"; then
+      red "deploy/certs/gateway.key is not readable by uid $guid, which is what the gateway runs as."
+      red "Bind mounts do not remap ownership, so the container sees this file exactly as the host does."
+      red "Fix it with:"
+      red "  setfacl -m u:${guid}:r $DEPLOY/certs/gateway.key"
+      fail=1
+    fi
   fi
 
   [ "$fail" -eq 0 ] || return 1

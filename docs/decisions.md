@@ -319,3 +319,53 @@ Eleven per-task reviews and twelve fix rounds had already run. Everything below 
 **The gateway container could not write its own data directory.** `/data` did not exist in the image, so Docker created the named volume `root:root` while the container runs as uid 10001: `audit.Open` fails on `O_CREATE`, `chhayad` calls `log.Fatalf`, and `restart: unless-stopped` turns that into a crash loop. Verified both ways by building the image before and after. The image now creates `/data` owned by 10001 so a fresh volume is seeded with that ownership.
 
 **The pattern worth keeping.** Four of these six are the same mistake in different clothes: a correct in-process invariant assumed to hold across a process, a file, a container boundary or a future refactor. Per-task review cannot see that, because each task was right about the thing it owned.
+
+---
+
+## 2026-10-24 — The gateway could not read its own TLS key, for the same reason it could not write its own data directory
+
+The entry above records `/data` being created `root:root` under a container running as
+uid 10001. This is the other half of that bug, found the first time the stack was started
+for real: `deploy/gen-certs.sh` ended with `chmod 600 ./*.key`, leaving `gateway.key`
+owned by whoever ran it — uid 1000 on a developer machine — while `Dockerfile.gateway`
+runs the gateway as uid 10001. Bind mounts do not remap ownership, so the key arrived
+inside the container as `1000:1000 0600` and `chhayad` died on
+`load server keypair: permission denied`, which `restart: unless-stopped` turned into a
+crash loop. Two files each held half the fact and neither referenced the other.
+
+**The fix is on the host, at generation time.** Nothing inside the container can correct
+it: the mount is `:ro` and there is no root phase to chown from. `gen-certs.sh` now grants
+the gateway's uid read on `gateway.key` and traverse on the certs directory, and **reads
+that uid out of `Dockerfile.gateway`** rather than writing it down a second time — the two
+drifting apart is the entire bug, so the number now lives in one place.
+
+**An ACL, not chmod or chgrp.** `chmod 0644` makes a private key readable by every account
+on the host. `chgrp` needs root, which turns a one-command setup step into a sudo step.
+A file's owner may set an ACL on it unprivileged, which is tight and needs no escalation.
+`setfacl` is checked for and its absence is a hard failure naming the `chgrp` alternative,
+rather than a silent fallback to something weaker.
+
+**The grant is verified, not assumed.** A filesystem mounted without ACL support accepts
+`setfacl` and silently does nothing, which would have produced a script that printed
+success and a gateway that still crash-looped. `gen-certs.sh` reads the ACL back and fails
+if it did not stick.
+
+**Traverse was a second, separate bug inside the fix.** The first attempt granted read on
+the key and was still refused, because `mkdir -p` honours the caller's umask: under
+`umask 077` the certs directory is `0700` and uid 10001 cannot traverse into it, producing
+a byte-identical error message. Granting `+x` to that one uid keeps the directory shut to
+everyone else, which `chmod 755` would not.
+
+**`make dev-doctor` now checks it, because the generation-time fix cannot reach existing
+installs.** `gen-certs.sh` refuses to run over existing certificates, so every machine set
+up before this change keeps the broken permissions forever. The preflight reports the
+unreadable key by name with the exact command to fix it, which is the whole point of a
+preflight: a crash loop reading `permission denied` on a `.key` file looks like a TLS
+configuration problem and is not one.
+
+**Only `gateway.key` is granted.** `ca.key` is never read by any container. `hermes.key` is
+read by a container that currently runs as root, so it needs nothing today — that is a
+dependency on Hermes staying root, noted in the script where the next person will see it.
+
+**Reopen if:** the gateway stops running as a fixed uid, Hermes stops running as root, or
+the certs move out of a bind mount into a secrets mechanism that does its own mapping.
