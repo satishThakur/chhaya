@@ -17,7 +17,21 @@
 # The design's end state is a local proxy at http://127.0.0.1:4000/v1 so every LLM
 # call is traced and session_affinity_header can carry the conversation id. Until
 # that exists, a direct provider is fine for a smoke test — you just get no traces.
-model: "${CHHAYA_HERMES_MODEL}"
+#
+# The dict form, not a bare string, and the `provider:` key is load-bearing. Hermes'
+# first-run gate (`_has_any_provider_configured`, hermes_cli/main.py:1094) decides
+# whether the agent is configured at all, and it never consults `providers:`. It
+# checks a fixed set of provider env var names — PROXY_API_KEY is not one of them —
+# then `auth.json`, then `model.provider` / `model.base_url` / `model.api_key`. With
+# a scalar `model:` every one of those misses, and Hermes exits 1 at boot with
+# "no API keys or providers found" while the providers block below loads perfectly.
+# Verified both ways against the pinned image: scalar -> gate False, this -> gate True.
+#
+# Naming the provider here also routes the agent through providers.chhaya explicitly
+# instead of letting Hermes infer an endpoint from the model name.
+model:
+  provider: chhaya
+  default: "${CHHAYA_HERMES_MODEL}"
 
 providers:
   chhaya:
@@ -44,6 +58,18 @@ mcp_servers:
     url: "https://gateway:8443/mcp"
     client_cert: "/certs/hermes.crt"
     client_key: "/certs/hermes.key"
+    # No `ssl_verify` key here on purpose, and it must not come back as a path.
+    #
+    # Verification IS on — it defaults to true, and our CA reaches it through
+    # SSL_CERT_FILE in docker-compose.yml, which points at a bundle of the image's
+    # certifi roots plus chhaya-ca. Setting `ssl_verify: /certs/ca.crt` looks more
+    # explicit and does not work: Hermes passes the value to httpx as `verify=`, and
+    # httpx 0.28 rejects `verify=<str>` combined with a client certificate with
+    # "Build an ssl.SSLContext and pass it as verify=<ctx>" — which YAML cannot
+    # express. Tried, measured, reverted.
+    #
+    # Never `ssl_verify: false`. Without it anything answering on gateway:8443 can
+    # impersonate the policy gateway, which is the one component the design trusts.
     # Both of these default to ON and are nested dicts, not booleans — writing
     # `sampling: false` makes Hermes crash on startup rather than ignore the key.
     sampling:

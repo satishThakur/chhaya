@@ -32,6 +32,11 @@ mentions() { grep -qE "^${2}=" "$1" 2>/dev/null; }
 # and that one cannot drift. Empty if the adduser line ever changes shape.
 gateway_uid() { sed -n 's/^RUN adduser .*-u \([0-9][0-9]*\).*/\1/p' "$DEPLOY/Dockerfile.gateway" 2>/dev/null | head -1; }
 
+# The uid Hermes runs as. Not the image's `User` (root) — s6 starts the agent with
+# `s6-setuidgid hermes`, uid 10000 from the pinned image's /etc/passwd. Kept in step
+# with deploy/gen-certs.sh, which grants hermes.key to the same number.
+HERMES_UID=10000
+
 # readable_by FILE UID -> true if that uid can read the file, by any of the three
 # routes that work: an ACL entry, a matching group with the group bit set, or
 # world-readable. Bind mounts pass ownership through unremapped, so what the host
@@ -133,6 +138,27 @@ preflight() {
     fi
   fi
 
+  # --- Hermes can read its own client key ----------------------------------
+  # Same bug, different uid, and a far worse symptom. s6 runs the agent as uid
+  # 10000 (`s6-setuidgid hermes`), not as the image's root User. A client key it
+  # cannot read does not say "permission denied" anywhere obvious — the MCP
+  # handshake just never completes, Hermes blows its 60 s startup deadline, s6
+  # SIGTERMs it, and the container crash-loops looking like a network fault.
+  if [ -f "$DEPLOY/certs/hermes.key" ]; then
+    if ! traversable_by "$DEPLOY/certs" "$HERMES_UID"; then
+      red "deploy/certs is not traversable by uid $HERMES_UID, which is what Hermes runs as."
+      red "  setfacl -m u:${HERMES_UID}:x $DEPLOY/certs"
+      fail=1
+    fi
+    if ! readable_by "$DEPLOY/certs/hermes.key" "$HERMES_UID"; then
+      red "deploy/certs/hermes.key is not readable by uid $HERMES_UID, which is what Hermes runs as."
+      red "Hermes will not report this: it fails its MCP handshake, misses its startup"
+      red "deadline and crash-loops. Fix it with:"
+      red "  setfacl -m u:${HERMES_UID}:r $DEPLOY/certs/hermes.key"
+      fail=1
+    fi
+  fi
+
   [ "$fail" -eq 0 ] || return 1
   grn "preflight ok"
 }
@@ -150,9 +176,59 @@ render_config() {
         -e "s|\${CHHAYA_HERMES_API_BASE}|${CHHAYA_HERMES_API_BASE}|g" \
         "$ROOT/hermes/config.yaml" > "$RENDERED"
   fi
-  chmod 600 "$RENDERED"
+  # 0644, not 0600. The Hermes container does not run this file's owner: s6 starts
+  # the agent with `s6-setuidgid hermes`, uid 10000, and a bind mount passes host
+  # ownership through unremapped — so a 0600 file renders fine and then fails at boot
+  # with "Your settings file could not be read ... Permission denied", after which
+  # Hermes silently runs on defaults. That is the dangerous part: sampling,
+  # elicitation, the toolsets allowlist and skills.write_approval all revert.
+  #
+  # Readable rather than ACL'd for uid 10000 because this file carries no secret —
+  # `key_env: PROXY_API_KEY` is a variable name, and the value lives in .env.hermes,
+  # which stays 0600. An ACL would also hard-code a uid owned by a pinned third-party
+  # image, and break quietly the next time that pin moves.
+  chmod 644 "$RENDERED"
   grep -q '\${' "$RENDERED" && die "unsubstituted placeholders remain in $RENDERED"
   grn "rendered hermes config -> ${RENDERED#"$ROOT"/}"
+}
+
+# Build the CA bundle Hermes verifies TLS against: the pinned image's own certifi
+# bundle, plus our CA.
+#
+# Hermes hands `ssl_verify` straight to httpx as `verify=`, and httpx 0.28 refuses
+# `verify=<path>` together with a client certificate ("Build an ssl.SSLContext and
+# pass it as verify=<ctx>") — which a YAML config cannot express. The way in is
+# SSL_CERT_FILE, which httpx's default context does honour.
+#
+# It must be a BUNDLE, never our CA alone: SSL_CERT_FILE REPLACES the trust store,
+# so pointing it at ca.crt makes Hermes trust chhaya-ca and nothing else, and the
+# Telegram connection dies with CERTIFICATE_VERIFY_FAILED. Measured: certifi alone
+# 119 certs, bundle 120, and with the bundle Telegram and the Anthropic API both
+# verify while gateway:8443 does too.
+#
+# Taken from the image rather than the host so the trust set is exactly the one the
+# pinned image ships, and rebuilt on every `up` so a pin bump cannot leave a stale
+# bundle behind. certifi is asked where its bundle lives; the path contains the
+# Python version and must not be hard-coded.
+build_ca_bundle() {
+  local image bundle
+  image="$(sed -n 's/^[[:space:]]*image:[[:space:]]*\(nousresearch\/hermes-agent@sha256:[0-9a-f]*\).*/\1/p' "$DEPLOY/docker-compose.yml" | head -1)"
+  [ -n "$image" ] || die "could not read the Hermes image ref from docker-compose.yml"
+  bundle="$DEPLOY/certs/ca-bundle.pem"
+
+  docker run --rm --entrypoint sh "$image" -c \
+    'cat "$(/opt/hermes/.venv/bin/python -c "import certifi;print(certifi.where())")"' > "$bundle.tmp" \
+    || die "could not read certifi's bundle out of $image"
+  [ -s "$bundle.tmp" ] || die "certifi bundle came back empty from $image"
+
+  cat "$DEPLOY/certs/ca.crt" >> "$bundle.tmp"
+  mv "$bundle.tmp" "$bundle"
+  # No secret here — public certificates only — and Hermes reads it as uid 10000.
+  chmod 644 "$bundle"
+
+  local n; n="$(grep -c 'BEGIN CERTIFICATE' "$bundle")"
+  [ "$n" -gt 1 ] || die "ca-bundle.pem has only $n certificate(s); expected the image's bundle plus ours"
+  grn "built certs/ca-bundle.pem ($n certificates: the image's certifi bundle plus chhaya-ca)"
 }
 
 cmd_certs() {
@@ -166,6 +242,7 @@ cmd_certs() {
 cmd_up() {
   preflight || die "preflight failed — nothing was started"
   render_config
+  build_ca_bundle
   "${COMPOSE[@]}" up -d --build
   echo
   grn "stack up. Next:"

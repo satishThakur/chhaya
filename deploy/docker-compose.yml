@@ -33,14 +33,39 @@ services:
     volumes:
       - hermes-data:/data         # NOT :ro — Hermes creates cron/ at init and fails on a read-only home
       # Rendered by scripts/dev.sh from hermes/config.yaml with the model values
-      # substituted. Mounted read-only; if Hermes ever needs to migrate its own
-      # config in place it will fail loudly here and this becomes read-write.
+      # substituted. Mounted read-only, and it must stay that way.
+      #
+      # The original note here said this becomes read-write if Hermes ever needs to
+      # migrate its own config in place. Hermes does — it migrates config version
+      # 0 -> 51 at boot and logs `[config-migrate] ERROR: [Errno 30] Read-only file
+      # system` — but read-write is the wrong answer, tried and reverted:
+      # s6's fix-attrs runs as root and chowns everything under HERMES_HOME to
+      # hermes:hermes, which a bind mount propagates to the HOST file. The rendered
+      # config came back as 10000:10000 0640, the operator could no longer read it,
+      # and `make dev-up` failed to re-render with "Permission denied".
+      #
+      # The migration failure is a warning, not a fault: `[stage2] Warning:
+      # docker_config_migrate.py failed; continuing`, and every setting in this file
+      # is still applied — verified by Hermes discovering mcp_servers.chhaya and
+      # connecting Telegram on the same boot. Read-only keeps hermes/config.yaml the
+      # single source of truth, which is the property that matters: this file carries
+      # sampling/elicitation off, the toolsets allowlist and skills.write_approval.
       - ./.hermes-config.rendered.yaml:/data/config.yaml:ro
       - ./certs/ca.crt:/certs/ca.crt:ro
       - ./certs/hermes.crt:/certs/hermes.crt:ro
       - ./certs/hermes.key:/certs/hermes.key:ro
+      # The image's own certifi bundle with chhaya-ca appended, rebuilt by
+      # scripts/dev.sh on every `up`. See build_ca_bundle for why this exists.
+      - ./certs/ca-bundle.pem:/certs/ca-bundle.pem:ro
     environment:
       HERMES_HOME: /data
+      # How our CA reaches Hermes' TLS verification. Hermes passes `ssl_verify`
+      # directly to httpx as `verify=`, and httpx 0.28 rejects a path there when a
+      # client certificate is also set, so the MCP server block cannot name a CA —
+      # this can. It points at the BUNDLE, never at ca.crt: SSL_CERT_FILE replaces
+      # the trust store outright, and with only our CA in it Hermes cannot verify
+      # Telegram.
+      SSL_CERT_FILE: /certs/ca-bundle.pem
     depends_on:
       - gateway
     restart: unless-stopped

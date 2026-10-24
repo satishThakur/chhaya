@@ -72,33 +72,51 @@ if [ -f ca.key ]; then
   exit 1
 fi
 
+# basicConstraints and keyUsage are not optional decoration. Without them Go's
+# crypto/tls and curl still accept this CA — which is why `make dev-status` passed
+# for weeks — but Python's stricter verifier refuses it outright with
+# `CERTIFICATE_VERIFY_FAILED: CA cert does not include key usage extension`, and
+# Hermes verifies in Python. A CA that only some verifiers accept is a CA that
+# works until the one client that matters tries to use it.
 openssl req -x509 -newkey rsa:4096 -days 3650 -nodes \
-  -keyout ca.key -out ca.crt -subj "/CN=chhaya-ca"
+  -keyout ca.key -out ca.crt -subj "/CN=chhaya-ca" \
+  -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign"
 
 # Server. SAN must cover whatever Hermes puts in its mcp_servers url.
 openssl req -newkey rsa:4096 -nodes -keyout gateway.key -out gateway.csr \
   -subj "/CN=chhaya-gateway"
 openssl x509 -req -in gateway.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
   -out gateway.crt -days 825 \
-  -extfile <(printf "subjectAltName=DNS:gateway,DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth")
+  -extfile <(printf "subjectAltName=DNS:gateway,DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\nkeyUsage=critical,digitalSignature,keyEncipherment")
 
 # Client, for Hermes.
 openssl req -newkey rsa:4096 -nodes -keyout hermes.key -out hermes.csr \
   -subj "/CN=hermes"
 openssl x509 -req -in hermes.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
   -out hermes.crt -days 825 \
-  -extfile <(printf "extendedKeyUsage=clientAuth")
+  -extfile <(printf "extendedKeyUsage=clientAuth\nkeyUsage=critical,digitalSignature")
 
 rm -f ./*.csr
 chmod 600 ./*.key
 
-# Only gateway.key needs the grant. ca.key never leaves the host, and hermes.key
-# is read by a container that currently runs as root — if that ever stops being
-# true, Hermes will fail exactly the way the gateway did, and the fix is one more
-# grant_read line here.
+# Both containers need to read their own key, and neither runs as the user who
+# generated it.
+#
+# An earlier version of this comment claimed hermes.key needed no grant because the
+# Hermes container runs as root. That is true of the image's `User` and false of the
+# process: s6 starts the agent with `s6-setuidgid hermes` (uid 10000, from the pinned
+# image's /etc/passwd). The visible symptom was not "permission denied" — it was
+# Hermes failing its MCP connection, blowing its 60 s startup deadline and
+# crash-looping, because a client key it cannot read is a TLS handshake it cannot
+# finish. Only ca.key is read by nobody but the host.
 GATEWAY_UID="$(gateway_uid)"
+HERMES_UID=10000
+
 grant_traverse . "$GATEWAY_UID"
+grant_traverse . "$HERMES_UID"
 grant_read gateway.key "$GATEWAY_UID"
+grant_read hermes.key "$HERMES_UID"
 
 echo "wrote CA, gateway and hermes certs to $PWD"
-echo "granted uid $GATEWAY_UID traverse on $PWD and read on gateway.key"
+echo "granted uid $GATEWAY_UID read on gateway.key, uid $HERMES_UID read on hermes.key"
