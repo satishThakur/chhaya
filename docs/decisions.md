@@ -369,3 +369,66 @@ dependency on Hermes staying root, noted in the script where the next person wil
 
 **Reopen if:** the gateway stops running as a fixed uid, Hermes stops running as root, or
 the certs move out of a bind mount into a secrets mechanism that does its own mapping.
+
+---
+
+## 2026-10-24 — How our CA reaches Hermes, and why it is a bundle
+
+Bringing the stack up for real produced four bugs (`docs/bugs.md` B10) and one open
+blocker (B8). Three of the four were the same mistake: a fact about a container's uid
+written in one file and contradicted in another. The decisions worth not re-litigating:
+
+**`model` is the dict form, and the `provider:` key is load-bearing.** Hermes' first-run
+gate never consults `providers:`. It checks a fixed set of provider env var names —
+`PROXY_API_KEY` is not among them — then `auth.json`, then `model.provider` /
+`model.base_url` / `model.api_key`. A scalar `model:` misses every one, and Hermes exits 1
+claiming no providers exist while the providers block below loads perfectly. Naming the
+provider under `model:` both satisfies the gate and routes explicitly through
+`providers.chhaya` rather than letting Hermes infer an endpoint.
+
+**The rendered config is 0644 and read-only.** Hermes runs as uid 10000, so 0600 made it
+unreadable — and Hermes then runs on *defaults silently*, which reverts sampling,
+elicitation, the toolsets allowlist and `skills.write_approval`. Readable rather than
+ACL'd because the file carries no secret: `key_env: PROXY_API_KEY` is a variable name and
+the value stays in `.env.hermes`.
+
+Read-write was tried, so that Hermes could complete its config migration, and reverted.
+s6's `fix-attrs` runs as root and chowns everything under `HERMES_HOME`, which a bind mount
+propagates to the **host** file: the rendered config came back `10000:10000 0640`, the
+operator could not read it, and `make dev-up` could not re-render. The migration failure is
+a warning and every setting still applies. Read-only keeps `hermes/config.yaml` the single
+source of truth, which is the property that matters.
+
+**The CA carries `basicConstraints` and `keyUsage`, because Go is lenient and Python is
+not.** The CA was generated with neither. Go's `crypto/tls` and curl accept it, which is
+why `make dev-status` reported green from the day the certs were created, while Python
+refuses it outright with `CA cert does not include key usage extension`. Hermes verifies in
+Python. A CA that only some verifiers accept is a CA that works until the one client that
+matters tries to use it — and a green status check that exercises only the lenient verifier
+is worse than no check, because it is evidence pointing the wrong way.
+
+**Our CA reaches Hermes through `SSL_CERT_FILE`, not through `ssl_verify`.** The obvious
+spelling, `ssl_verify: /certs/ca.crt` on the MCP server block, cannot work: Hermes passes
+that value to httpx as `verify=`, and httpx 0.28 rejects `verify=<str>` combined with a
+client certificate — *"Build an ssl.SSLContext and pass it as verify=<ctx>"* — which a YAML
+config cannot express. `SSL_CERT_FILE` is honoured by httpx's default context and needs no
+fork.
+
+**It points at a bundle, never at `ca.crt` alone.** `SSL_CERT_FILE` *replaces* the trust
+store rather than adding to it. Pointed at our CA, Hermes trusts `chhaya-ca` and nothing
+else, and the Telegram connection dies with `CERTIFICATE_VERIFY_FAILED`. Measured: certifi
+alone 119 certificates, bundle 120; with the bundle, Telegram, the Anthropic API and
+`gateway:8443` all verify. The bundle is built from the **image's own** certifi roots, not
+the host's, so the trust set is exactly what the pinned image ships, and it is rebuilt on
+every `up` so a pin bump cannot leave a stale one behind.
+
+**`make dev-doctor` checks that each container can read its own key.** `gen-certs.sh`
+grants this at generation time but refuses to re-run over existing certificates, so it
+cannot reach an install made before the grants existed. The preflight can. This matters
+most for `hermes.key`, where the failure names nothing: the MCP handshake simply never
+completes, Hermes misses its 60 s startup deadline, and the container crash-loops looking
+like a network fault.
+
+**Reopen if:** either container stops running as a fixed uid, the Hermes pin moves (recheck
+uid 10000, the certifi path and the httpx version), or the certs move to a secrets
+mechanism that does its own uid mapping.

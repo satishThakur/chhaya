@@ -128,7 +128,98 @@ exclusion. This is step 7 of the smoke-test checklist in `docs/runbook.md`.
 
 ---
 
+## B8 — Hermes cycles on its own 60 s startup deadline
+
+**Severity:** blocker · **Found:** 2026-10-24, first live bring-up · **Area:** `deploy/docker-compose.yml`, the pinned image
+
+Hermes reaches `☤ Hermes Gateway Starting...`, connects Telegram in polling mode, then
+exits with `Error: Gateway starting: deadline` roughly 60 s later and is restarted by s6.
+`DEFAULT_ENSURE_TIMEOUT = 60.0` in `hermes_cli/gateway_runtime.py` is the client's wait for
+a cold daemon; it is a hardcoded constant, not a config key. The daemon does come up — it
+logs `Gateway control socket listening at /data/gateway.sock` — but never reports ready
+inside the budget, so `container_boot` gives up and the service is torn down.
+
+**What is ruled out.** Not the config (every setting loads — Hermes discovers
+`mcp_servers.chhaya` and applies the providers block). Not egress (Telegram 1.49 s,
+Anthropic reachable from the container's netns). Not `/data` ownership (the volume is
+`10000:10000` and writable; s6's `fix-attrs` chowns it). Not the client key or the CA, both
+fixed in `b2f545f`. Not load (loadavg 0.69–1.24 at the deadline).
+
+**What is not ruled out.** Whether the MCP connection to the gateway is still in the
+startup critical path and still failing for a *new* reason after `b2f545f` — the
+certificate errors are gone from the logs, but no successful MCP connection has been
+observed either, and the gateway has logged no completed handshake from Hermes. Also
+untested: whether the boot-time self-update (see B9) is what eats the budget.
+
+**What would settle it:** read `/data/logs/gateway.log` and `/data/logs/container-boot.log`
+across one full cycle and find what the daemon is waiting on between
+`control socket listening` and the SIGTERM ~59 s later.
+
+---
+
+## B9 — The pinned image self-updates at boot
+
+**Severity:** degrades · **Found:** 2026-10-24 · **Area:** the pinned Hermes image
+
+The image runs an updater on startup: `Handing off to the new updater (package manager)`,
+then installs Python and Node dependencies and rebuilds the TUI (which itself fails with
+`EXDEV: cross-device link not permitted`). The project rule is that Hermes is pinned to a
+release and upgraded deliberately after reading the changelog; a container that mutates
+itself at boot means the digest pins what we *start*, not what we *run*.
+
+It also plausibly costs most of the startup budget in B8.
+
+**Fix:** find the flag or env var that disables the boot-time update and set it in
+`docker-compose.yml`, or accept it and say so in `docs/decisions.md`. Not yet investigated.
+
+---
+
 ## Closed
+
+### B10 — Four bugs that stopped Hermes starting, reaching the gateway, or verifying it
+
+**Severity:** blocker · **Found:** 2026-10-24, first live bring-up · **Fixed:** `b2f545f`
+
+Each was hidden behind the one before it, and three are the same mistake in different
+clothes — a fact about a container's uid held in one file and contradicted in another.
+
+1. **The first-run gate never consults `providers:`.** `_has_any_provider_configured`
+   checks a fixed set of provider env var names (`PROXY_API_KEY` is not one), `auth.json`,
+   then `model.provider` / `model.base_url` / `model.api_key`. A scalar `model:` misses all
+   of them, so Hermes exited 1 with "no API keys or providers found" while the providers
+   block loaded perfectly. `model` is now the dict form naming the provider. Verified both
+   ways against the pinned image: scalar -> gate False, dict -> gate True.
+
+2. **The rendered config was unreadable by Hermes.** `render_config` chmod 600'd it; s6
+   runs the agent as uid 10000 (`s6-setuidgid hermes`), not the image's root `User`. Hermes
+   then runs on defaults *silently*, which is the dangerous part — sampling, elicitation,
+   the toolsets allowlist and `skills.write_approval` all revert. Now 0644; the file holds
+   no secret.
+
+3. **Hermes could not read its own client key**, same uid reason. The symptom named
+   nothing: the MCP handshake never completed, Hermes missed its startup deadline, s6
+   SIGTERMed it, and the container crash-looped looking like a network fault.
+
+4. **The CA was malformed** — generated with no `basicConstraints` and no `keyUsage`. Go's
+   `crypto/tls` and curl accept it, which is why `make dev-status` passed from the day the
+   certs were made, but Python refuses it with `CA cert does not include key usage
+   extension`, and Hermes verifies in Python. **A CA that only some verifiers accept is a
+   CA that works until the one client that matters tries to use it.**
+
+Also reverted in the same change: making the config mount read-write so Hermes could
+migrate it. s6's `fix-attrs` chowns everything under `HERMES_HOME`, and a bind mount
+propagates that to the *host* file — the rendered config came back `10000:10000 0640`, the
+operator could no longer read it, and re-rendering failed. The migration failure is a
+warning, not a fault.
+
+Full reasoning, including why `SSL_CERT_FILE` points at a bundle rather than at `ca.crt`,
+is in `docs/decisions.md`, 2026-10-24.
+
+**Note for anyone updating:** certificates must be regenerated, and the stack must be
+**stopped** first — Docker recreates a bind-mount source as a *directory* if it is deleted
+while a container holds it.
+
+---
 
 ### B7 — The gateway could not read its own TLS key
 
