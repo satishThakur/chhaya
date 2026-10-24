@@ -17,6 +17,10 @@ services:
       CHHAYA_TLS_CA: /etc/chhaya/certs/ca.crt
     volumes:
       - gateway-data:/data
+      # Personal memory is the asset and lives in git, not in a volume. Writable
+      # because memory.propose_update stages proposals under .proposals/ — it
+      # never edits a document, but it does need somewhere to put the proposal.
+      - ../memory:/data/memory
       - ../config/policy.yaml:/etc/chhaya/policy.yaml:ro
       - ./certs:/etc/chhaya/certs:ro
     ports:
@@ -28,6 +32,10 @@ services:
     env_file: .env.hermes         # exactly one secret: Hermes' own bot token
     volumes:
       - hermes-data:/data         # NOT :ro — Hermes creates cron/ at init and fails on a read-only home
+      # Rendered by scripts/dev.sh from hermes/config.yaml with the model values
+      # substituted. Mounted read-only; if Hermes ever needs to migrate its own
+      # config in place it will fail loudly here and this becomes read-write.
+      - ./.hermes-config.rendered.yaml:/data/config.yaml:ro
       - ./certs/ca.crt:/certs/ca.crt:ro
       - ./certs/hermes.crt:/certs/hermes.crt:ro
       - ./certs/hermes.key:/certs/hermes.key:ro

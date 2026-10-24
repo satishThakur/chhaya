@@ -9,9 +9,14 @@
 *.p12
 certs/
 secrets/
+# Rendered from hermes/config.yaml at `make dev-up`; carries no secret itself but
+# is environment-specific and regenerated every start.
+deploy/.hermes-config.rendered.yaml
 
 # --- runtime state ---
 # Personal memory IS tracked (it's the asset). These are not.
+# Staged memory proposals: generated, reviewed, then applied or dropped.
+memory/.proposals/
 audit/*.log
 audit/*.jsonl
 *.db

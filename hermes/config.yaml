@@ -1,0 +1,86 @@
+# Hermes' configuration. Mounted into the Hermes container at $HERMES_HOME/config.yaml.
+#
+# Hermes is an adopted dependency pinned by digest. This file is the whole of our
+# control over it: which model it talks to, which tools it can reach, and which of
+# its own defaults we override. Everything else about what the agent may DO lives in
+# the gateway, not here — a limit written in this file is a preference, a limit in
+# internal/policy is enforced.
+#
+# Every key below was read out of the pinned image's hermes_cli/config_defaults.py
+# or its source, not from memory. Where a value is unverified it says so.
+
+# --- model ----------------------------------------------------------------
+# Hermes cannot start without a provider. M0b deliberately does NOT include the
+# logging proxy (see the spec's out-of-scope list), so point this at whatever you
+# want to drive the live test with and set the matching key in deploy/.env.hermes.
+#
+# The design's end state is a local proxy at http://127.0.0.1:4000/v1 so every LLM
+# call is traced and session_affinity_header can carry the conversation id. Until
+# that exists, a direct provider is fine for a smoke test — you just get no traces.
+model: "${CHHAYA_HERMES_MODEL}"
+
+providers:
+  chhaya:
+    api: "${CHHAYA_HERMES_API_BASE}"
+    key_env: PROXY_API_KEY
+    transport: chat_completions
+    # Carries the conversation id to the provider on every call, including the
+    # auxiliary ones. This is what makes one task equal to one trace without
+    # forking Hermes. Harmless against a direct provider; load-bearing once the
+    # proxy lands. Verified present in the pinned image.
+    session_affinity_header: x-chhaya-session-id
+
+# --- the one door ---------------------------------------------------------
+# The gateway is the only MCP server Hermes can see, reached over HTTPS with a
+# client certificate. It is NOT spawned as a subprocess: Hermes would then own the
+# lifecycle of the process holding the kill switch, and Hermes strips
+# credential-named env vars from MCP subprocesses, which would force the gateway's
+# secrets into this file.
+#
+# Host is the compose service name, which the gateway certificate's SAN covers
+# (DNS:gateway, DNS:localhost, IP:127.0.0.1).
+mcp_servers:
+  chhaya:
+    url: "https://gateway:8443/mcp"
+    client_cert: "/certs/hermes.crt"
+    client_key: "/certs/hermes.key"
+    # Both of these default to ON and are nested dicts, not booleans — writing
+    # `sampling: false` makes Hermes crash on startup rather than ignore the key.
+    sampling:
+      enabled: false      # the gateway never asks Hermes for inference
+    elicitation:
+      enabled: false      # no approval path that routes through the agent
+
+# --- tool surface ---------------------------------------------------------
+# `toolsets` is an ALLOWLIST and this is Hermes' own default. The taint model
+# depends on the gateway being the only door for untrusted reads: the gateway
+# cannot taint-track a page Hermes fetched by itself.
+#
+# UNVERIFIED — see docs/bugs.md B6. The allowlist shape strongly suggests web,
+# browser and fetch tools are excluded unless added, but what the "hermes-cli"
+# toolset actually contains has not been confirmed. The smoke test asks the agent
+# to fetch a URL precisely to settle this. If it can, this list needs tightening
+# before the taint model means anything.
+toolsets:
+  - hermes-cli
+
+# --- Hermes' own gates ----------------------------------------------------
+# These govern Hermes' prompts about its OWN dangerous operations. They are not
+# the gateway's approval system — that runs on a separate bot the agent cannot
+# reach. Both systems being strict is the point.
+approvals:
+  # Valid values are "manual", "smart" and "off" (approval_context.py:263).
+  # Default is "smart". "manual" asks every time rather than letting Hermes judge
+  # which commands are dangerous; for an agent that writes its own skills, we would
+  # rather be asked.
+  mode: manual
+  # Default 300. Unattended surfaces already fail closed (cron/single-query/
+  # unattended all default to "deny").
+  timeout: 300
+
+skills:
+  # Permanent. A skill can declare required_environment_variables and have them
+  # forwarded into the sandbox automatically with no config change, so approval on
+  # skill writes is the only control standing in front of that path. Defaults to
+  # false; this is a deliberate override.
+  write_approval: true
