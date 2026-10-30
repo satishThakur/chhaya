@@ -86,14 +86,23 @@ writable_dir_by() {
 # operator, so the gateway (uid 10001) needs an ACL grant on all of it — except
 # memory/.git, which the gateway has no business writing. The default ACLs on
 # directories keep files the gateway creates writable by the operator, and files
-# the operator creates writable by the gateway. .proposals is gitignored and
-# created here because nothing else creates it.
+# the operator creates writable by the gateway. Only operator-owned regular files
+# and directories are touched: setfacl needs the caller to own the file, so a
+# gateway-owned proposal or applied/ dir would fail with EPERM and abort `up`, and
+# the gateway already has owner rights on those, while the parent's default ACL
+# covers the operator. Symlinks are skipped because setfacl follows them, which
+# would grant the gateway whatever they point at outside memory/. .proposals is
+# gitignored and created here because nothing else creates it.
 prepare_memory() {
   local guid me; guid="$(gateway_uid)"; me="$(id -u)"
   [ -n "$guid" ] || { ylw "could not read the gateway uid — not granting memory/"; return 0; }
   mkdir -p "$ROOT/memory/.proposals"
-  find "$ROOT/memory" -path "$ROOT/memory/.git" -prune -o -print0 | xargs -0 setfacl -m "u:${guid}:rwX"
-  find "$ROOT/memory" -path "$ROOT/memory/.git" -prune -o -type d -print0 | xargs -0 setfacl -d -m "u:${guid}:rwX,u:${me}:rwX"
+  find "$ROOT/memory" -path "$ROOT/memory/.git" -prune -o -user "$me" \( -type f -o -type d \) -print0 \
+    | xargs -0r setfacl -m "u:${guid}:rwX" \
+    || die "setfacl on memory/ failed — is the filesystem mounted without ACL support?"
+  find "$ROOT/memory" -path "$ROOT/memory/.git" -prune -o -user "$me" -type d -print0 \
+    | xargs -0r setfacl -d -m "u:${guid}:rwX,u:${me}:rwX" \
+    || die "setting default ACLs on memory/ directories failed — is the filesystem mounted without ACL support?"
   writable_dir_by "$ROOT/memory/taste" "$guid" || die "setfacl on memory/taste did not take — an approved memory tap will fail"
   writable_dir_by "$ROOT/memory/.proposals" "$guid" || die "setfacl on memory/.proposals did not take — propose_update will fail"
 }
@@ -200,7 +209,7 @@ preflight() {
   for d in "$ROOT/memory/taste" "$ROOT/memory/.proposals"; do
     if [ -n "$guid" ] && [ -d "$d" ] && ! writable_dir_by "$d" "$guid"; then
       red "${d#"$ROOT"/} is not writable by uid $guid, so memory proposals or approvals will fail."
-      red "  find $ROOT/memory -path $ROOT/memory/.git -prune -o -print0 | xargs -0 setfacl -m u:${guid}:rwX"
+      red "  find $ROOT/memory -path $ROOT/memory/.git -prune -o -user $(id -u) \\( -type f -o -type d \\) -print0 | xargs -0r setfacl -m u:${guid}:rwX"
       fail=1
     fi
   done
