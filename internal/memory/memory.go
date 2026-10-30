@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -175,6 +176,11 @@ func (s Store) Load(id string) (Proposal, error) {
 	if err := json.Unmarshal(b, &p); err != nil {
 		return Proposal{}, fmt.Errorf("proposal %s: %w", id, err)
 	}
+	// The file is untrusted: an id that differs from the one asked for would
+	// steer the move out of .proposals or onto another proposal.
+	if p.ID != id {
+		return Proposal{}, fmt.Errorf("proposal %s: file carries id %q", id, p.ID)
+	}
 	return p, nil
 }
 
@@ -252,7 +258,7 @@ func (s Store) ApplyApproved(id string, now time.Time) (Proposal, error) {
 	if err := appendEntry(doc, id, entry, now); err != nil {
 		return Proposal{}, err
 	}
-	return s.move(p, "applied", "approved", now)
+	return s.move(id, p, "applied", "approved", now)
 }
 
 // Reject moves a proposal to .proposals/rejected. It never opens the document.
@@ -261,7 +267,7 @@ func (s Store) Reject(id string, now time.Time) (Proposal, error) {
 	if err != nil {
 		return Proposal{}, err
 	}
-	return s.move(p, "rejected", "rejected", now)
+	return s.move(id, p, "rejected", "rejected", now)
 }
 
 // appendEntry writes the provenance-stamped line with O_APPEND, never
@@ -273,21 +279,31 @@ func appendEntry(doc, id, entry string, now time.Time) error {
 	switch {
 	case os.IsNotExist(err):
 		title := filepath.Base(strings.TrimSuffix(doc, ".md"))
-		title = strings.ToUpper(title[:1]) + title[1:]
+		r, n := utf8.DecodeRuneInString(title)
+		title = string(unicode.ToUpper(r)) + title[n:]
 		f, err := os.OpenFile(doc, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o664)
 		if err != nil {
 			return err
 		}
+		// A document left empty or headerless would take the next append with
+		// no title, so any failure after the create removes it.
+		fail := func(err error) error {
+			f.Close()
+			os.Remove(doc)
+			return err
+		}
 		// The umask would otherwise leave 0644, and the agent's worker is another user.
 		if err := os.Chmod(doc, 0o664); err != nil {
-			f.Close()
-			return err
+			return fail(err)
 		}
 		if _, err := f.WriteString("# " + title + "\n\n" + stamped); err != nil {
-			f.Close()
+			return fail(err)
+		}
+		if err := f.Close(); err != nil {
+			os.Remove(doc)
 			return err
 		}
-		return f.Close()
+		return nil
 	case err != nil:
 		return err
 	}
@@ -314,7 +330,7 @@ func appendEntry(doc, id, entry string, now time.Time) error {
 }
 
 // move records the decision in sub/<id>.json and removes the pending file.
-func (s Store) move(p Proposal, sub, decision string, now time.Time) (Proposal, error) {
+func (s Store) move(id string, p Proposal, sub, decision string, now time.Time) (Proposal, error) {
 	p.Decision = decision
 	p.DecidedAt = now.UTC().Format(time.RFC3339)
 	body, err := json.Marshal(p)
@@ -325,14 +341,14 @@ func (s Store) move(p Proposal, sub, decision string, now time.Time) (Proposal, 
 	if err := mkdir(dir); err != nil {
 		return Proposal{}, err
 	}
-	file := filepath.Join(dir, p.ID+".json")
+	file := filepath.Join(dir, id+".json")
 	if err := os.WriteFile(file, body, 0o644); err != nil {
 		return Proposal{}, err
 	}
 	if err := os.Chmod(file, 0o644); err != nil {
 		return Proposal{}, err
 	}
-	if err := s.Remove(p.ID); err != nil {
+	if err := s.Remove(id); err != nil {
 		return Proposal{}, err
 	}
 	return p, nil

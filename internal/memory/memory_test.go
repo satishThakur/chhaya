@@ -147,6 +147,28 @@ func line(id, entry string) string {
 	return "- " + entry + " <!-- proposal " + id + ", approved 2026-10-30 -->\n"
 }
 
+func stage(t *testing.T, s Store, path, entry string) Proposal {
+	t.Helper()
+	p, err := s.Stage(path, entry, "r", t1030)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func rewriteProposal(t *testing.T, s Store, id string, mut func(*Proposal)) {
+	t.Helper()
+	p, err := s.Load(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mut(&p)
+	b, _ := json.Marshal(p)
+	if err := os.WriteFile(filepath.Join(s.Root, ".proposals", id+".json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func readFile(t *testing.T, p string) string {
 	t.Helper()
 	b, err := os.ReadFile(p)
@@ -203,7 +225,7 @@ func TestApplyOnAnEmptyDocument(t *testing.T) {
 	if err := os.WriteFile(doc, nil, 0o664); err != nil {
 		t.Fatal(err)
 	}
-	p, _ := s.Stage("taste/food", "No okra.", "r", t1030)
+	p := stage(t, s, "taste/food", "No okra.")
 	if _, err := s.ApplyApproved(p.ID, t1030); err != nil {
 		t.Fatal(err)
 	}
@@ -255,12 +277,14 @@ func TestApplyIsIdempotentAfterACrash(t *testing.T) {
 	s, _ := newRoot(t)
 	root := s.Root
 	doc := filepath.Join(root, "taste", "food.md")
-	p, _ := s.Stage("taste/food", "No okra.", "r", t1030)
+	p := stage(t, s, "taste/food", "No okra.")
 	f, err := os.OpenFile(doc, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.WriteString(line(p.ID, "No okra."))
+	if _, err := f.WriteString(line(p.ID, "No okra.")); err != nil {
+		t.Fatal(err)
+	}
 	f.Close()
 	if _, err := s.ApplyApproved(p.ID, t1030); err != nil {
 		t.Fatal(err)
@@ -276,8 +300,8 @@ func TestApplyIsIdempotentAfterACrash(t *testing.T) {
 func TestTwoApprovalsLandInOrder(t *testing.T) {
 	s, _ := newRoot(t)
 	root := s.Root
-	a, _ := s.Stage("taste/food", "Entry A.", "r", t1030)
-	b, _ := s.Stage("taste/food", "Entry B.", "r", t1030)
+	a := stage(t, s, "taste/food", "Entry A.")
+	b := stage(t, s, "taste/food", "Entry B.")
 	for _, id := range []string{b.ID, a.ID} {
 		if _, err := s.ApplyApproved(id, t1030); err != nil {
 			t.Fatal(err)
@@ -302,8 +326,9 @@ func TestApplyRefusesAProposalEditedToEscape(t *testing.T) {
 		}
 	}
 	cases := map[string]func(t *testing.T, s Store, root string, p *Proposal){
-		"path":  func(t *testing.T, s Store, root string, p *Proposal) { p.Path = "../outside" },
-		"entry": func(t *testing.T, s Store, root string, p *Proposal) { p.Entry = "x\ny" },
+		"path":        func(t *testing.T, s Store, root string, p *Proposal) { p.Path = "../outside" },
+		"proposal_id": func(t *testing.T, s Store, root string, p *Proposal) { p.ID = "../outside" },
+		"entry":       func(t *testing.T, s Store, root string, p *Proposal) { p.Entry = "x\ny" },
 		"symlink": func(t *testing.T, s Store, root string, p *Proposal) {
 			out := t.TempDir()
 			if err := os.RemoveAll(filepath.Join(root, "taste")); err != nil {
@@ -347,7 +372,7 @@ func TestApplyOnAMissingProposalErrors(t *testing.T) {
 	root := s.Root
 	doc := filepath.Join(root, "taste", "food.md")
 	before := readFile(t, doc)
-	p, _ := s.Stage("taste/food", "No okra.", "r", t1030)
+	p := stage(t, s, "taste/food", "No okra.")
 	if err := s.Remove(p.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +389,7 @@ func TestRejectLeavesTheDocumentByteIdentical(t *testing.T) {
 	root := s.Root
 	doc := filepath.Join(root, "taste", "food.md")
 	before := readFile(t, doc)
-	p, _ := s.Stage("taste/food", "No okra.", "r", t1030)
+	p := stage(t, s, "taste/food", "No okra.")
 	got, err := s.Reject(p.ID, t1030)
 	if err != nil {
 		t.Fatal(err)
@@ -380,5 +405,53 @@ func TestRejectLeavesTheDocumentByteIdentical(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, ".proposals", p.ID+".json")); !os.IsNotExist(err) {
 		t.Errorf("pending file still there: %v", err)
+	}
+}
+
+func TestDecisionsRefuseAForgedProposalID(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		do   func(Store, string) (Proposal, error)
+	}{
+		{"apply", func(s Store, id string) (Proposal, error) { return s.ApplyApproved(id, t1030) }},
+		{"reject", func(s Store, id string) (Proposal, error) { return s.Reject(id, t1030) }},
+	} {
+		for _, forged := range []string{"../outside", ""} {
+			t.Run(tc.name+forged, func(t *testing.T) {
+				s, doc := newRoot(t)
+				before := readFile(t, doc)
+				p := stage(t, s, "taste/food", "No okra.")
+				other := stage(t, s, "taste/food", "Other.")
+				if forged == "" {
+					forged = other.ID // another pending proposal's id
+				}
+				rewriteProposal(t, s, p.ID, func(q *Proposal) { q.ID = forged })
+				if _, err := tc.do(s, p.ID); err == nil {
+					t.Fatal("want an error")
+				}
+				if _, err := os.Stat(filepath.Join(filepath.Dir(s.Root), "outside.json")); !os.IsNotExist(err) {
+					t.Errorf("wrote outside the root: %v", err)
+				}
+				if readFile(t, doc) != before {
+					t.Error("document changed")
+				}
+				for _, id := range []string{p.ID, other.ID} {
+					if _, err := os.Stat(filepath.Join(s.Root, ".proposals", id+".json")); err != nil {
+						t.Errorf("proposal %s not left pending: %v", id, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestApplyTitleIsRuneSafe(t *testing.T) {
+	s, _ := newRoot(t)
+	p := stage(t, s, "taste/éclair", "No cream.")
+	if _, err := s.ApplyApproved(p.ID, t1030); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(s.Root, "taste", "éclair.md")); !strings.HasPrefix(got, "# Éclair\n\n") {
+		t.Errorf("doc = %q", got)
 	}
 }
