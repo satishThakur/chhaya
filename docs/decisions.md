@@ -432,3 +432,60 @@ like a network fault.
 **Reopen if:** either container stops running as a fixed uid, the Hermes pin moves (recheck
 uid 10000, the certifi path and the httpx version), or the certs move to a secrets
 mechanism that does its own uid mapping.
+
+---
+
+## 2026-10-30 — The gateway writes Personal memory, but only on a human tap
+
+**The old promise was enforced by the filesystem.** `scripts/dev.sh` granted the gateway
+uid write on `memory/.proposals/` and nothing else, so `memory.propose_update` could stage
+a proposal and could not edit a document even if its code tried. Nothing read the
+proposals: there was no way to approve one, and the file was `0600` owned by uid 10001, so
+the operator could not even read it on the host. "I do not like okra" produced a proposal id
+and nothing else.
+
+**The new promise: the gateway edits a Personal memory document only on a human tap on the
+approver bot, never from a tool call.** `memory.propose_update` takes one literal line
+(`entry`, e.g. `No okra.`), stages it, and posts a card to the approver bot. A tap on
+approve appends `- <entry> <!-- proposal <id>, approved <date> -->` to the document. Hermes
+is out of the loop between the proposal and the write, so the tap is the gate, not the
+agent and not a file permission. `memory.Store.ApplyApproved` has one caller, the tap
+handler in `internal/approval`, and no MCP tool reaches it. `dev.sh` now grants the gateway
+`rwX` on all of `memory/` except `memory/.git`, with default ACLs on directories for both
+the gateway uid and the operator so each can write what the other creates.
+
+**The tap still asks `policy.Decide`.** The handler builds a synthetic request — tool
+`memory.apply`, tier 0, kind write — and refuses on `Deny`, so the kill switch and the rate
+limit hold against a tap exactly as against a tool call: a tap does not outrank `/stop`.
+`NeedApproval`, which taint produces, is treated as satisfied, because the tap is the human
+approval it asks for. Every tap is audited as actor `approver`, tool `memory.apply`, with
+the proposal id and path but never the entry.
+
+**What was approved is the card, not the file.** The handler reloads the proposal and
+refuses the write if its path or entry differs from what the card showed. Otherwise a
+proposal edited on disk after the card went out would be written under an approval nobody
+gave to those words.
+
+**A failed write keeps the card's buttons.** A refusal by policy answers the tap and leaves
+the card as it was; any other failure edits the card to `⚠️ not written: <reason>` and puts
+the same buttons back. The proposal is still pending, so once the cause is fixed the same
+card is tapped again rather than the agent being asked to re-propose.
+
+**Append with `O_APPEND`, never write-a-temp-file-and-rename.** A rename replaces the inode,
+so the document would come back owned by uid 10001 with the directory's default ACL in place
+of the operator's file and its own grants. It would also discard any write made between the read
+and the rename. `O_APPEND` keeps the inode, owner and ACL, and each line lands whole.
+
+**A document the gateway creates is `0664`.** With an ACL on the directory, a file's group
+bits become the ACL mask. A `0644` create sets the mask to `r--`, which cuts the operator's
+default `rwX` entry down to read, and the operator could no longer edit a document the
+gateway had created. `0664` keeps the mask at `rw-`.
+
+**Proposals in the old `diff` format are shelved, not converted.** On start the bot moves
+any proposal with no `entry` to `.proposals/legacy/` and logs it. A diff was free text with
+no single line to append, and turning it into one would be the gateway writing words the
+user never saw on a card.
+
+**Reopen if:** anything inside the gateway other than the tap handler writes to `memory/`,
+or any MCP tool gains a path to `ApplyApproved`. Either one turns the grant on `memory/` into
+a write the agent can cause without a human.

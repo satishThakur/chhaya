@@ -78,18 +78,24 @@ writable_dir_by() {
   return 1
 }
 
-# memory.propose_update stages proposals in memory/.proposals/, inside a bind mount
-# of the host's memory/ — owned by the operator, so the gateway (uid 10001) gets
-# "mkdir /data/memory/.proposals: permission denied". The grant is on .proposals
-# ONLY, never on memory/ itself: propose_update promises it never edits a document,
-# and leaving the documents unwritable to the gateway makes the filesystem hold that
-# promise too. Gitignored; created here because nothing else creates it.
-prepare_proposals() {
-  local guid d="$ROOT/memory/.proposals"; guid="$(gateway_uid)"
-  [ -n "$guid" ] || { ylw "could not read the gateway uid — not granting memory/.proposals"; return 0; }
-  mkdir -p "$d"
-  setfacl -m "u:${guid}:rwx" "$d"
-  writable_dir_by "$d" "$guid" || die "setfacl on memory/.proposals did not take — propose_update will fail"
+# The gateway edits a Personal memory document only on a human tap on the approver
+# bot, never from a tool call. memory.propose_update stages a proposal in
+# memory/.proposals/ and posts a card; the tap handler in internal/approval is the
+# one caller of the code that appends to a document (see docs/decisions.md,
+# 2026-10-30). memory/ is a bind mount of the host's directory, owned by the
+# operator, so the gateway (uid 10001) needs an ACL grant on all of it — except
+# memory/.git, which the gateway has no business writing. The default ACLs on
+# directories keep files the gateway creates writable by the operator, and files
+# the operator creates writable by the gateway. .proposals is gitignored and
+# created here because nothing else creates it.
+prepare_memory() {
+  local guid me; guid="$(gateway_uid)"; me="$(id -u)"
+  [ -n "$guid" ] || { ylw "could not read the gateway uid — not granting memory/"; return 0; }
+  mkdir -p "$ROOT/memory/.proposals"
+  find "$ROOT/memory" -path "$ROOT/memory/.git" -prune -o -print0 | xargs -0 setfacl -m "u:${guid}:rwX"
+  find "$ROOT/memory" -path "$ROOT/memory/.git" -prune -o -type d -print0 | xargs -0 setfacl -d -m "u:${guid}:rwX,u:${me}:rwX"
+  writable_dir_by "$ROOT/memory/taste" "$guid" || die "setfacl on memory/taste did not take — an approved memory tap will fail"
+  writable_dir_by "$ROOT/memory/.proposals" "$guid" || die "setfacl on memory/.proposals did not take — propose_update will fail"
 }
 
 preflight() {
@@ -185,14 +191,19 @@ preflight() {
     fi
   fi
 
-  # --- the gateway can stage memory proposals -------------------------------
-  # `make dev-up` creates and grants this; here we only check. Missing is fine
-  # before the first `up`; present but unwritable means propose_update fails.
-  if [ -n "$guid" ] && [ -d "$ROOT/memory/.proposals" ] && ! writable_dir_by "$ROOT/memory/.proposals" "$guid"; then
-    red "memory/.proposals is not writable by uid $guid, so memory.propose_update will fail."
-    red "  setfacl -m u:${guid}:rwx $ROOT/memory/.proposals"
-    fail=1
-  fi
+  # --- the gateway can stage proposals and apply approved ones -------------
+  # `make dev-up` creates and grants these; here we only check. A missing
+  # .proposals is fine before the first `up`; present but unwritable means
+  # propose_update fails, and an unwritable memory/taste means a tap on approve
+  # fails. The fix is the same grant prepare_memory makes.
+  local d
+  for d in "$ROOT/memory/taste" "$ROOT/memory/.proposals"; do
+    if [ -n "$guid" ] && [ -d "$d" ] && ! writable_dir_by "$d" "$guid"; then
+      red "${d#"$ROOT"/} is not writable by uid $guid, so memory proposals or approvals will fail."
+      red "  find $ROOT/memory -path $ROOT/memory/.git -prune -o -print0 | xargs -0 setfacl -m u:${guid}:rwX"
+      fail=1
+    fi
+  done
 
   [ "$fail" -eq 0 ] || return 1
   grn "preflight ok"
@@ -275,7 +286,7 @@ cmd_certs() {
 }
 
 cmd_up() {
-  prepare_proposals
+  prepare_memory
   preflight || die "preflight failed — nothing was started"
   render_config
   build_ca_bundle

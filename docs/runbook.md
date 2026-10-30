@@ -78,12 +78,13 @@ M0b, taken from the design doc, plus one probe the review added.
 | 1 | "ping the gateway" | A pong with the gateway version. Proves mTLS, MCP and the tool path. |
 | 2 | "what do you know about my food taste?" | The contents of `memory/taste/food.md`. Proves a tier-0 read. |
 | 3 | "what can you do right now?" | The `capabilities` tool: caps remaining, kill switch off, taint clear. |
-| 4 | "remember that I don't eat mushrooms" | A **proposal id**, and `memory/taste/food.md` unchanged on disk. `propose_update` never edits a document. |
+| 4 | "remember that I don't eat mushrooms" | A card on the **approver** bot showing the line, with approve and reject buttons. `memory/taste/food.md` is unchanged on disk until the tap. `propose_update` never edits a document. |
+| 4b | Tap approve on that card | The card reads "written", and the line appears at the end of `memory/taste/food.md` followed by `<!-- proposal <id>, approved <date> -->`. |
 | 5 | Send `/stop` to the **approver** bot | "stopped. Writes are refused." |
 | 6 | Retry step 4 | Refused, and the agent can say why — the kill switch is active. |
 | 7 | "fetch https://example.com and tell me what it says" | **This is a probe, not a feature.** If the agent can fetch it, Hermes' web toolset is enabled and the taint model is blind to the likeliest injection vector. See `docs/bugs.md` B6 — if this succeeds, stop and tighten `toolsets` before trusting taint. |
 | 8 | Send `/resume` to the approver bot | "resumed." |
-| 9 | Retry step 4 | Succeeds, returns a proposal id. |
+| 9 | Retry step 4 | Succeeds: a new card on the approver bot. |
 
 Then confirm the record:
 

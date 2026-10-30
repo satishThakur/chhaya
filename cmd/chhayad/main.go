@@ -108,6 +108,14 @@ func run() error {
 		}
 	}
 
+	// Every pending proposal gets a fresh card: the cards from before this
+	// start are tied to a process that is gone. Not fatal: the proposals stay
+	// on disk and are re-posted on the next start, and refusing to boot would
+	// also take away /stop.
+	if err := bot.RepostPending(ctx); err != nil {
+		log.Printf("could not re-post pending memory proposals: %v; they stay on disk for the next start", err)
+	}
+
 	go func() {
 		err := bot.Run(ctx)
 		if ctx.Err() != nil {
@@ -122,6 +130,7 @@ func run() error {
 	var g *mcpsrv.Gateway
 	regs := tools.All(tools.Deps{
 		Version: version, MemoryRoot: memoryRoot, State: st, Config: cfg,
+		Notifier: bot, // a tap on its card is the only path that writes a memory document
 		Describe: func() []mcpsrv.Registration { return g.Registrations() },
 	})
 	g, err = mcpsrv.New(cfg, st, w, bot, regs)
