@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,16 @@ import (
 	"github.com/satishthakur/chhaya/internal/policy"
 	"github.com/satishthakur/chhaya/internal/state"
 )
+
+type fakeNotifier struct {
+	got []memory.Proposal
+	err error
+}
+
+func (f *fakeNotifier) ProposeMemory(_ context.Context, p memory.Proposal) error {
+	f.got = append(f.got, p)
+	return f.err
+}
 
 func deps(t *testing.T) Deps {
 	t.Helper()
@@ -37,7 +48,17 @@ func deps(t *testing.T) Deps {
 			DefaultRatePerHour: 60,
 		},
 		Describe: func() []mcpsrv.Registration { return nil },
+		Notifier: &fakeNotifier{},
 	}
+}
+
+func proposalFiles(t *testing.T, root string) []string {
+	t.Helper()
+	m, err := filepath.Glob(filepath.Join(root, ".proposals", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
 }
 
 func find(t *testing.T, regs []mcpsrv.Registration, name string) mcpsrv.Registration {
@@ -135,14 +156,22 @@ func TestProposeUpdateWritesAProposalNotTheFile(t *testing.T) {
 	}
 
 	out, err := find(t, All(d), "memory.propose_update").Handle(context.Background(), map[string]any{
-		"path": "taste/food", "diff": "+ No mushrooms either.", "rationale": "said so on Tuesday",
+		"path": "taste/food", "entry": "No mushrooms either.", "rationale": "said so on Tuesday",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := out.(map[string]any)["proposal_id"].(string)
+	m := out.(map[string]any)
+	id := m["proposal_id"].(string)
 	if id == "" {
 		t.Fatal("no proposal id")
+	}
+	if m["status"] != "sent for approval" {
+		t.Errorf("status = %v", m["status"])
+	}
+	n := d.Notifier.(*fakeNotifier)
+	if len(n.got) != 1 || n.got[0].ID != id || n.got[0].Entry != "No mushrooms either." {
+		t.Errorf("notifier got %+v, want the staged proposal %s", n.got, id)
 	}
 
 	after, _ := os.ReadFile(filepath.Join(d.MemoryRoot, "taste", "food.md"))
@@ -164,7 +193,7 @@ func TestProposeUpdateWritesAProposalNotTheFile(t *testing.T) {
 func TestProposeUpdateRequiresARationale(t *testing.T) {
 	d := deps(t)
 	h := find(t, All(d), "memory.propose_update").Handle
-	if _, err := h(context.Background(), map[string]any{"path": "taste/food", "diff": "+x"}); err == nil {
+	if _, err := h(context.Background(), map[string]any{"path": "taste/food", "entry": "x"}); err == nil {
 		t.Fatal("every memory entry records its provenance; a proposal without one is not a proposal")
 	}
 }
@@ -245,8 +274,52 @@ func TestProposeUpdateRefusesOutOfRootPath(t *testing.T) {
 	d := deps(t)
 	h := find(t, All(d), "memory.propose_update").Handle
 	if _, err := h(context.Background(), map[string]any{
-		"path": "../../../etc/passwd", "diff": "+x", "rationale": "nope",
+		"path": "../../../etc/passwd", "entry": "x", "rationale": "nope",
 	}); err == nil {
 		t.Fatal("propose_update must refuse out-of-root paths just like memory.get")
+	}
+}
+
+func TestProposeUpdateRefusesAMultiLineEntry(t *testing.T) {
+	d := deps(t)
+	h := find(t, All(d), "memory.propose_update").Handle
+	if _, err := h(context.Background(), map[string]any{
+		"path": "taste/food", "entry": "a\nb", "rationale": "why",
+	}); err == nil {
+		t.Fatal("a multi-line entry must be refused")
+	}
+	if f := proposalFiles(t, d.MemoryRoot); len(f) != 0 {
+		t.Fatalf("staged %v for a refused entry", f)
+	}
+	if n := d.Notifier.(*fakeNotifier); len(n.got) != 0 {
+		t.Fatal("notifier was called for a refused entry")
+	}
+}
+
+func TestProposeUpdateWithAFailingNotifierSavesNothing(t *testing.T) {
+	d := deps(t)
+	d.Notifier = &fakeNotifier{err: errors.New("telegram down")}
+	_, err := find(t, All(d), "memory.propose_update").Handle(context.Background(), map[string]any{
+		"path": "taste/food", "entry": "No okra.", "rationale": "why",
+	})
+	if err == nil || !strings.Contains(err.Error(), "telegram down") || !strings.Contains(err.Error(), "nothing was saved") {
+		t.Fatalf("err = %v, want the notifier failure and 'nothing was saved'", err)
+	}
+	if f := proposalFiles(t, d.MemoryRoot); len(f) != 0 {
+		t.Fatalf("left %v behind after the approver was unreachable", f)
+	}
+}
+
+func TestProposeUpdateWithNoNotifierFailsClosed(t *testing.T) {
+	d := deps(t)
+	d.Notifier = nil
+	_, err := find(t, All(d), "memory.propose_update").Handle(context.Background(), map[string]any{
+		"path": "taste/food", "entry": "No okra.", "rationale": "why",
+	})
+	if err == nil {
+		t.Fatal("with no approver wired the proposal must be refused")
+	}
+	if f := proposalFiles(t, d.MemoryRoot); len(f) != 0 {
+		t.Fatalf("staged %v with no approver", f)
 	}
 }

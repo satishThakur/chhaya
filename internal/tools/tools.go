@@ -4,12 +4,9 @@ package tools
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/satishthakur/chhaya/internal/mcpsrv"
@@ -18,11 +15,19 @@ import (
 	"github.com/satishthakur/chhaya/internal/state"
 )
 
+// MemoryNotifier sends a staged proposal to the user's approver. *approval.Bot
+// satisfies it; tools does not import approval.
+type MemoryNotifier interface {
+	ProposeMemory(ctx context.Context, p memory.Proposal) error
+}
+
 type Deps struct {
 	Version    string
 	MemoryRoot string
 	State      *state.Store
 	Config     policy.Config
+	// Notifier posts memory proposals to the approver. Nil fails closed.
+	Notifier MemoryNotifier
 	// Describe returns tool metadata for capabilities(). It is a function
 	// because capabilities needs the list All() is in the middle of building.
 	Describe func() []mcpsrv.Registration
@@ -61,42 +66,32 @@ func All(d Deps) []mcpsrv.Registration {
 		},
 		{
 			Name: "memory.propose_update",
-			Description: "Propose a change to a Personal memory document. This does NOT write the document; " +
-				"it records a proposal for review. A rationale is required — every memory entry records why it exists.",
+			Description: "Propose one line for a Personal memory document. This does NOT write the document: " +
+				"it sends the line to the user's approver bot, and the gateway appends it only if they tap approve. " +
+				"A rationale is required — it is recorded as provenance.",
 			Tier: policy.TierInternal, Kind: policy.Write, Trust: mcpsrv.Trusted,
-			Redact: []string{"diff"},
+			Redact: []string{"entry"},
 			Schema: json.RawMessage(`{"type":"object","properties":{` +
 				`"path":{"type":"string","description":"document path, e.g. taste/food"},` +
-				`"diff":{"type":"string","description":"the proposed change"},` +
+				`"entry":{"type":"string","description":"one line, written verbatim to the document after the user approves it, e.g. \"No okra.\""},` +
 				`"rationale":{"type":"string","description":"why this change; recorded as provenance"}},` +
-				`"required":["path","diff","rationale"]}`),
-			Handle: func(_ context.Context, args map[string]any) (any, error) {
-				path, diff, why := str(args["path"]), str(args["diff"]), str(args["rationale"])
-				if path == "" || diff == "" {
-					return nil, fmt.Errorf("path and diff are both required")
+				`"required":["path","entry","rationale"]}`),
+			Handle: func(ctx context.Context, args map[string]any) (any, error) {
+				if d.Notifier == nil {
+					return nil, fmt.Errorf("memory proposals are disabled: no approver is wired")
 				}
-				if why == "" {
-					return nil, fmt.Errorf("a rationale is required: every memory entry records its provenance")
-				}
-				if _, err := memory.Resolve(d.MemoryRoot, path); err != nil {
-					return nil, err
-				}
-				id, err := newID()
+				store := memory.Store{Root: d.MemoryRoot}
+				p, err := store.Stage(str(args["path"]), str(args["entry"]), str(args["rationale"]), time.Now())
 				if err != nil {
 					return nil, err
 				}
-				dir := filepath.Join(d.MemoryRoot, ".proposals")
-				if err := os.MkdirAll(dir, 0o700); err != nil {
-					return nil, err
+				if err := d.Notifier.ProposeMemory(ctx, p); err != nil {
+					if rmErr := store.Remove(p.ID); rmErr != nil {
+						return nil, fmt.Errorf("the approver bot did not receive the proposal: %v; and the staged proposal %s could not be removed: %v", err, p.ID, rmErr)
+					}
+					return nil, fmt.Errorf("the approver bot did not receive the proposal, so nothing was saved: %v. Tell the user their approver bot is not responding.", err)
 				}
-				body, _ := json.Marshal(map[string]any{
-					"proposal_id": id, "path": path, "diff": diff,
-					"rationale": why, "proposed_at": time.Now().UTC().Format(time.RFC3339),
-				})
-				if err := os.WriteFile(filepath.Join(dir, id+".json"), body, 0o600); err != nil {
-					return nil, err
-				}
-				return map[string]any{"proposal_id": id, "status": "recorded for review"}, nil
+				return map[string]any{"proposal_id": p.ID, "status": "sent for approval"}, nil
 			},
 		},
 		{
@@ -139,14 +134,6 @@ func All(d Deps) []mcpsrv.Registration {
 			},
 		},
 	}
-}
-
-func newID() (string, error) {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return time.Now().UTC().Format("20060102") + "-" + hex.EncodeToString(b), nil
 }
 
 func str(v any) string {

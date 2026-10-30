@@ -168,7 +168,7 @@ func invokeProposeUpdate(t *testing.T, dir string) mcpsrv.ToolResult {
 
 	return g.Invoke(context.Background(), mcpsrv.ToolCall{
 		Actor: "hermes", Name: "memory.propose_update",
-		Args: map[string]any{"path": "taste/food", "diff": "+ nothing", "rationale": "exit check"},
+		Args: map[string]any{"path": "taste/food", "entry": "nothing", "rationale": "exit check"},
 	})
 }
 
@@ -320,7 +320,7 @@ func TestBlockedWriteOverRealMTLS(t *testing.T) {
 
 	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
 		Name:      "memory.propose_update",
-		Arguments: map[string]any{"path": "taste/food", "diff": "+ nothing", "rationale": "exit check over mTLS"},
+		Arguments: map[string]any{"path": "taste/food", "entry": "nothing", "rationale": "exit check over mTLS"},
 	})
 	if err != nil {
 		t.Fatalf("the refusal must arrive as a tool error the model can see, not a protocol error: %v", err)
