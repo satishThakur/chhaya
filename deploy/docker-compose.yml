@@ -30,8 +30,13 @@ services:
   hermes:
     image: nousresearch/hermes-agent@sha256:1d33f6087fab79d580ffaec34ceed825e11d7bb8e803206be75a56d027c62538
     env_file: .env.hermes         # exactly one secret: Hermes' own bot token
+    # Load-bearing. With no CMD the image's main-wrapper.sh runs bare `hermes`, which
+    # is the interactive chat CLI: with no TTY it reads EOF, prints "Goodbye", and the
+    # container exits and restarts forever. `gateway run` is the foreground messaging
+    # gateway — what serves Telegram — and the image's own help names it the Docker mode.
+    command: ["gateway", "run"]
     volumes:
-      - hermes-data:/data         # NOT :ro — Hermes creates cron/ at init and fails on a read-only home
+      - hermes-data:/data        # NOT :ro — Hermes creates cron/ at init and fails on a read-only home
       # Rendered by scripts/dev.sh from hermes/config.yaml with the model values
       # substituted. Mounted read-only, and it must stay that way.
       #
@@ -51,6 +56,10 @@ services:
       # single source of truth, which is the property that matters: this file carries
       # sampling/elicitation off, the toolsets allowlist and skills.write_approval.
       - ./.hermes-config.rendered.yaml:/data/config.yaml:ro
+      # Our persona and routing rules. Read-only for the same reason as config.yaml, and
+      # because the agent must not rewrite its own instructions. The image only seeds
+      # SOUL.md when the file is absent, so this mount is never overwritten.
+      - ../hermes/SOUL.md:/data/SOUL.md:ro
       - ./certs/ca.crt:/certs/ca.crt:ro
       - ./certs/hermes.crt:/certs/hermes.crt:ro
       - ./certs/hermes.key:/certs/hermes.key:ro

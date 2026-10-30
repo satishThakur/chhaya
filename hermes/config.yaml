@@ -110,3 +110,12 @@ skills:
   # skill writes is the only control standing in front of that path. Defaults to
   # false; this is a deliberate override.
   write_approval: true
+
+memory:
+  # Defaults to false, which lets the agent write USER.md / MEMORY.md freely — no
+  # approval, no audit entry, no provenance — and those files are injected into every
+  # session. Found live: "I don't like mushrooms" landed in USER.md with no gateway
+  # call at all. true never commits directly; from Telegram it stages the write under
+  # $HERMES_HOME/pending/memory/ for `/memory approve <id>`. Durable facts about the
+  # user belong in Personal memory via memory.propose_update; this is the small cache.
+  write_approval: true
