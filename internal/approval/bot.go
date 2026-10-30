@@ -13,9 +13,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/satishthakur/chhaya/internal/audit"
 	"github.com/satishthakur/chhaya/internal/mcpsrv"
+	"github.com/satishthakur/chhaya/internal/memory"
 	"github.com/satishthakur/chhaya/internal/policy"
 	"github.com/satishthakur/chhaya/internal/state"
 )
@@ -72,8 +74,12 @@ type Bot struct {
 	audit   *audit.Writer
 	timeout time.Duration
 
-	mu      sync.Mutex
-	waiting map[int64]*pending // keyed by the card's message id
+	cfg policy.Config
+	mem memory.Store
+
+	mu         sync.Mutex
+	waiting    map[int64]*pending // keyed by the card's message id
+	memWaiting map[int64]string   // memory card message id → proposal id
 
 	// unreachableAfter is injectable so a test can prove the CRITICAL record
 	// fires without waiting out the production threshold. NewBot sets the
@@ -85,10 +91,15 @@ type Bot struct {
 // only user whose taps count: in a private Telegram chat the chat id and the
 // user id are the same number, and collapsing them means there is no way to
 // configure a chat we listen to but do not trust.
-func NewBot(tg Telegram, chatID int64, st *state.Store, w *audit.Writer, timeout time.Duration) *Bot {
+//
+// cfg and mem exist for memory cards: a memory tap is decided by
+// policy.Decide here, against the same config the gateway uses, and applied
+// to the store directly rather than through any registered tool.
+func NewBot(tg Telegram, chatID int64, st *state.Store, w *audit.Writer, timeout time.Duration, cfg policy.Config, mem memory.Store) *Bot {
 	return &Bot{
-		tg: tg, chatID: chatID, state: st, audit: w, timeout: timeout,
-		waiting: map[int64]*pending{}, unreachableAfter: defaultUnreachableAfter,
+		tg: tg, chatID: chatID, state: st, audit: w, timeout: timeout, cfg: cfg, mem: mem,
+		waiting: map[int64]*pending{}, memWaiting: map[int64]string{},
+		unreachableAfter: defaultUnreachableAfter,
 	}
 }
 
@@ -259,6 +270,11 @@ func (b *Bot) tap(ctx context.Context, c *Callback) {
 		b.tg.AnswerCallback(ctx, c.ID, "that card has expired")
 		return
 	}
+	switch parts[0] {
+	case "mem-approve", "mem-reject":
+		b.memoryTap(ctx, c, parts[0] == "mem-approve")
+		return
+	}
 
 	b.mu.Lock()
 	p, ok := b.waiting[c.Message.ID]
@@ -403,9 +419,15 @@ func onOff(b bool) string {
 	return "off"
 }
 
+// truncate cuts s to at most n bytes, backing off to a rune boundary:
+// Telegram refuses text that is not valid UTF-8, and agent text is often not
+// ASCII.
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n] + "…"
 }

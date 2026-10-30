@@ -19,6 +19,7 @@ import (
 	"github.com/satishthakur/chhaya/internal/audit"
 	"github.com/satishthakur/chhaya/internal/config"
 	"github.com/satishthakur/chhaya/internal/mcpsrv"
+	"github.com/satishthakur/chhaya/internal/memory"
 	"github.com/satishthakur/chhaya/internal/state"
 	"github.com/satishthakur/chhaya/internal/tools"
 )
@@ -78,7 +79,7 @@ func run() error {
 	// Steps 3 and 4. The token must work and the chat must be reachable.
 	bot := approval.NewBot(
 		approval.NewHTTPTelegram(os.Getenv("CHHAYA_APPROVER_BOT_TOKEN"), nil),
-		chatID, st, w, cfg.ApprovalTimeout,
+		chatID, st, w, cfg.ApprovalTimeout, cfg, memory.Store{Root: memoryRoot},
 	)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

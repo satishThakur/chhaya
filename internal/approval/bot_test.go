@@ -14,6 +14,7 @@ import (
 
 	"github.com/satishthakur/chhaya/internal/audit"
 	"github.com/satishthakur/chhaya/internal/mcpsrv"
+	"github.com/satishthakur/chhaya/internal/memory"
 	"github.com/satishthakur/chhaya/internal/policy"
 	"github.com/satishthakur/chhaya/internal/state"
 )
@@ -27,7 +28,9 @@ type fakeTG struct {
 	sendErr       error
 	getChatOK     bool
 	answered      []string
-	getUpdatesErr error // non-nil: GetUpdates always fails, for the channel-unreachable test
+	answerTexts   []string         // parallel to answered: what each tap was told
+	edits         map[int64]string // message id → its latest edited text
+	getUpdatesErr error            // non-nil: GetUpdates always fails, for the channel-unreachable test
 	// reply, if set, is the callback this fake produces the moment a card is sent.
 	reply func(messageID int64) *Update
 	out   chan Update
@@ -73,10 +76,21 @@ func (f *fakeTG) AttachKeyboard(_ context.Context, _ int64, messageID int64, _ [
 	return nil
 }
 
-func (f *fakeTG) AnswerCallback(_ context.Context, id, _ string) error {
+func (f *fakeTG) AnswerCallback(_ context.Context, id, text string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.answered = append(f.answered, id)
+	f.answerTexts = append(f.answerTexts, text)
+	return nil
+}
+
+func (f *fakeTG) EditMessage(_ context.Context, _ int64, messageID int64, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.edits == nil {
+		f.edits = map[int64]string{}
+	}
+	f.edits[messageID] = text
 	return nil
 }
 
@@ -119,7 +133,7 @@ func newTestBot(t *testing.T, tg Telegram, timeout time.Duration) (*Bot, *state.
 	}
 	t.Cleanup(func() { w.Close() })
 
-	b := NewBot(tg, allowedUser, st, w, timeout)
+	b := NewBot(tg, allowedUser, st, w, timeout, policy.Config{DefaultRatePerHour: 60}, memory.Store{Root: t.TempDir()})
 	return b, st, logPath
 }
 
