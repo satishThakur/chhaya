@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/satishthakur/chhaya/internal/mcpsrv"
+	"github.com/satishthakur/chhaya/internal/memory"
 	"github.com/satishthakur/chhaya/internal/policy"
 	"github.com/satishthakur/chhaya/internal/state"
 )
@@ -228,14 +229,14 @@ func TestMemoryGetCannotBeEscapedBySymlink(t *testing.T) {
 		".",
 	} {
 		t.Run(rel, func(t *testing.T) {
-			if p, err := memoryPath(root, rel); err == nil {
+			if p, err := memory.Resolve(root, rel); err == nil {
 				t.Fatalf("%q escaped the memory root, resolved to %q", rel, p)
 			}
 		})
 	}
 
 	// A legitimate path that happens to contain traversal must still work.
-	if _, err := memoryPath(root, "taste/../taste/food"); err != nil {
+	if _, err := memory.Resolve(root, "taste/../taste/food"); err != nil {
 		t.Fatalf("a path that stays inside the root was refused: %v", err)
 	}
 }

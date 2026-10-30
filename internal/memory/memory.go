@@ -1,0 +1,231 @@
+// Package memory holds the Personal memory proposal store: staging a proposal,
+// validating the entry it carries, and resolving a document path inside the
+// memory root. It is pure filesystem; the tools and the approver build on it.
+package memory
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+	"unicode/utf8"
+)
+
+const maxEntryRunes = 200
+
+// Resolve resolves a document path inside the memory root and refuses
+// anything that leaves it, including a path whose final component does not
+// exist yet — the case a write would hit.
+func Resolve(root, rel string) (string, error) {
+	if rel == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	if strings.HasPrefix(rel, "/") {
+		return "", fmt.Errorf("path must be relative to the memory root")
+	}
+	absRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", err
+	}
+
+	// Reject traversal on the cleaned path BEFORE appending ".md". Clean turns
+	// "taste/food/../../.." into "..", and ".."+".md" fuses into the ordinary
+	// filename "...md" — which lands inside the root and silently looks safe.
+	clean := filepath.Clean(rel)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("path %q is outside the memory root", rel)
+	}
+
+	p := filepath.Join(absRoot, clean+".md")
+
+	// The parent must exist and resolve inside the root. Resolving only the
+	// full path skips the check whenever the final component does not exist
+	// yet, which is exactly the case a write would hit.
+	parent, err := filepath.EvalSymlinks(filepath.Dir(p))
+	if err != nil {
+		return "", fmt.Errorf("path %q: %w", rel, err)
+	}
+	if !containedIn(absRoot, parent) {
+		return "", fmt.Errorf("path %q is outside the memory root", rel)
+	}
+
+	final := filepath.Join(parent, filepath.Base(p))
+
+	// If the final component already exists it may itself be a symlink out.
+	if resolved, err := filepath.EvalSymlinks(final); err == nil && !containedIn(absRoot, resolved) {
+		return "", fmt.Errorf("path %q is outside the memory root", rel)
+	}
+	return final, nil
+}
+
+func containedIn(root, p string) bool {
+	return p == root || strings.HasPrefix(p, root+string(os.PathSeparator))
+}
+
+// ValidateEntry normalises a proposed memory line and refuses one that could
+// not be written as a single line or that could break out of the provenance
+// comment appended after it.
+func ValidateEntry(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	s = strings.TrimSpace(strings.TrimPrefix(s, "- "))
+	if s == "" {
+		return "", fmt.Errorf("entry is required")
+	}
+	if strings.ContainsAny(s, "\n\r") {
+		return "", fmt.Errorf("entry must be a single line")
+	}
+	// Runes, not bytes: the limit must not penalise non-Latin scripts.
+	if n := utf8.RuneCountInString(s); n > maxEntryRunes {
+		return "", fmt.Errorf("entry is %d characters; the limit is %d", n, maxEntryRunes)
+	}
+	if strings.Contains(s, "<!--") || strings.Contains(s, "-->") {
+		return "", fmt.Errorf("entry must not contain an HTML comment marker")
+	}
+	return s, nil
+}
+
+// Proposal is one staged change. Diff exists only so files written before
+// proposals carried an entry can be recognised and set aside.
+type Proposal struct {
+	ID         string `json:"proposal_id"`
+	Path       string `json:"path"`
+	Entry      string `json:"entry,omitempty"`
+	Diff       string `json:"diff,omitempty"`
+	Rationale  string `json:"rationale"`
+	ProposedAt string `json:"proposed_at"`
+	DecidedAt  string `json:"decided_at,omitempty"`
+	Decision   string `json:"decision,omitempty"`
+}
+
+// Store is the proposal queue under <Root>/.proposals.
+type Store struct{ Root string }
+
+var idPattern = regexp.MustCompile(`^\d{8}-[0-9a-f]{16}$`)
+
+func (s Store) dir() string { return filepath.Join(s.Root, ".proposals") }
+
+func newID(now time.Time) (string, error) {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return now.UTC().Format("20060102") + "-" + hex.EncodeToString(b), nil
+}
+
+// mkdir creates dir and forces its mode, because MkdirAll honours the umask.
+func mkdir(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.Chmod(dir, 0o755)
+}
+
+// Stage validates and records a proposal. It never touches the document.
+func (s Store) Stage(path, entry, rationale string, now time.Time) (Proposal, error) {
+	entry, err := ValidateEntry(entry)
+	if err != nil {
+		return Proposal{}, err
+	}
+	if strings.TrimSpace(rationale) == "" {
+		return Proposal{}, fmt.Errorf("a rationale is required: every memory entry records its provenance")
+	}
+	if _, err := Resolve(s.Root, path); err != nil {
+		return Proposal{}, err
+	}
+	id, err := newID(now)
+	if err != nil {
+		return Proposal{}, err
+	}
+	p := Proposal{ID: id, Path: path, Entry: entry, Rationale: rationale, ProposedAt: now.UTC().Format(time.RFC3339)}
+	body, err := json.Marshal(p)
+	if err != nil {
+		return Proposal{}, err
+	}
+	if err := mkdir(s.dir()); err != nil {
+		return Proposal{}, err
+	}
+	file := filepath.Join(s.dir(), id+".json")
+	if err := os.WriteFile(file, body, 0o644); err != nil {
+		return Proposal{}, err
+	}
+	// WriteFile honours the umask; the approver may run as another user.
+	if err := os.Chmod(file, 0o644); err != nil {
+		return Proposal{}, err
+	}
+	return p, nil
+}
+
+// Load reads one proposal. The id is checked against the generated format
+// first, so it can never be used as a path.
+func (s Store) Load(id string) (Proposal, error) {
+	if !idPattern.MatchString(id) {
+		return Proposal{}, fmt.Errorf("invalid proposal id %q", id)
+	}
+	b, err := os.ReadFile(filepath.Join(s.dir(), id+".json"))
+	if err != nil {
+		return Proposal{}, err
+	}
+	var p Proposal
+	if err := json.Unmarshal(b, &p); err != nil {
+		return Proposal{}, fmt.Errorf("proposal %s: %w", id, err)
+	}
+	return p, nil
+}
+
+// Remove deletes a proposal file.
+func (s Store) Remove(id string) error {
+	if !idPattern.MatchString(id) {
+		return fmt.Errorf("invalid proposal id %q", id)
+	}
+	return os.Remove(filepath.Join(s.dir(), id+".json"))
+}
+
+// Pending lists the proposals sitting directly in .proposals, sorted by ID.
+// A file with an entry is ready to card; one without predates entries and is
+// reported by ID in legacy.
+func (s Store) Pending() (ready []Proposal, legacy []string, err error) {
+	files, err := os.ReadDir(s.dir())
+	if os.IsNotExist(err) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, f := range files {
+		name := f.Name()
+		id := strings.TrimSuffix(name, ".json")
+		if f.IsDir() || id == name || !idPattern.MatchString(id) {
+			continue
+		}
+		p, err := s.Load(id)
+		if err != nil {
+			return nil, nil, err
+		}
+		if p.Entry == "" {
+			legacy = append(legacy, id)
+		} else {
+			ready = append(ready, p)
+		}
+	}
+	sort.Slice(ready, func(i, j int) bool { return ready[i].ID < ready[j].ID })
+	sort.Strings(legacy)
+	return ready, legacy, nil
+}
+
+// MoveLegacy sets a pre-entry proposal aside under .proposals/legacy.
+func (s Store) MoveLegacy(id string) error {
+	if !idPattern.MatchString(id) {
+		return fmt.Errorf("invalid proposal id %q", id)
+	}
+	dst := filepath.Join(s.dir(), "legacy")
+	if err := mkdir(dst); err != nil {
+		return err
+	}
+	return os.Rename(filepath.Join(s.dir(), id+".json"), filepath.Join(dst, id+".json"))
+}

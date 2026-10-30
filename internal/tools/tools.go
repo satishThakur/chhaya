@@ -10,10 +10,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/satishthakur/chhaya/internal/mcpsrv"
+	"github.com/satishthakur/chhaya/internal/memory"
 	"github.com/satishthakur/chhaya/internal/policy"
 	"github.com/satishthakur/chhaya/internal/state"
 )
@@ -48,7 +48,7 @@ func All(d Deps) []mcpsrv.Registration {
 			Tier: policy.TierInternal, Kind: policy.Read, Trust: mcpsrv.Trusted,
 			Schema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"document path, e.g. taste/food"}},"required":["path"]}`),
 			Handle: func(_ context.Context, args map[string]any) (any, error) {
-				p, err := memoryPath(d.MemoryRoot, str(args["path"]))
+				p, err := memory.Resolve(d.MemoryRoot, str(args["path"]))
 				if err != nil {
 					return nil, err
 				}
@@ -78,7 +78,7 @@ func All(d Deps) []mcpsrv.Registration {
 				if why == "" {
 					return nil, fmt.Errorf("a rationale is required: every memory entry records its provenance")
 				}
-				if _, err := memoryPath(d.MemoryRoot, path); err != nil {
+				if _, err := memory.Resolve(d.MemoryRoot, path); err != nil {
 					return nil, err
 				}
 				id, err := newID()
@@ -139,55 +139,6 @@ func All(d Deps) []mcpsrv.Registration {
 			},
 		},
 	}
-}
-
-// memoryPath resolves a document path inside the memory root and refuses
-// anything that leaves it, including a path whose final component does not
-// exist yet — the case a write would hit.
-func memoryPath(root, rel string) (string, error) {
-	if rel == "" {
-		return "", fmt.Errorf("path is required")
-	}
-	if strings.HasPrefix(rel, "/") {
-		return "", fmt.Errorf("path must be relative to the memory root")
-	}
-	absRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return "", err
-	}
-
-	// Reject traversal on the cleaned path BEFORE appending ".md". Clean turns
-	// "taste/food/../../.." into "..", and ".."+".md" fuses into the ordinary
-	// filename "...md" — which lands inside the root and silently looks safe.
-	clean := filepath.Clean(rel)
-	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
-		return "", fmt.Errorf("path %q is outside the memory root", rel)
-	}
-
-	p := filepath.Join(absRoot, clean+".md")
-
-	// The parent must exist and resolve inside the root. Resolving only the
-	// full path skips the check whenever the final component does not exist
-	// yet, which is exactly the case a write would hit.
-	parent, err := filepath.EvalSymlinks(filepath.Dir(p))
-	if err != nil {
-		return "", fmt.Errorf("path %q: %w", rel, err)
-	}
-	if !containedIn(absRoot, parent) {
-		return "", fmt.Errorf("path %q is outside the memory root", rel)
-	}
-
-	final := filepath.Join(parent, filepath.Base(p))
-
-	// If the final component already exists it may itself be a symlink out.
-	if resolved, err := filepath.EvalSymlinks(final); err == nil && !containedIn(absRoot, resolved) {
-		return "", fmt.Errorf("path %q is outside the memory root", rel)
-	}
-	return final, nil
-}
-
-func containedIn(root, p string) bool {
-	return p == root || strings.HasPrefix(p, root+string(os.PathSeparator))
 }
 
 func newID() (string, error) {
