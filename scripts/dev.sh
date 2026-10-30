@@ -85,12 +85,15 @@ writable_dir_by() {
 # 2026-10-30). memory/ is a bind mount of the host's directory, owned by the
 # operator, so the gateway (uid 10001) needs an ACL grant on all of it — except
 # memory/.git, which the gateway has no business writing. The default ACLs on
-# directories keep files the gateway creates writable by the operator, and files
-# the operator creates writable by the gateway. Only operator-owned regular files
-# and directories are touched: setfacl needs the caller to own the file, so a
-# gateway-owned proposal or applied/ dir would fail with EPERM and abort `up`, and
-# the gateway already has owner rights on those, while the parent's default ACL
-# covers the operator. Symlinks are skipped because setfacl follows them, which
+# directories keep files the gateway creates (0664) writable by the operator. A
+# file the operator creates is writable by the gateway only if it is created
+# group-writable: a 0644 create sets the ACL mask to r--, which cuts the
+# gateway's entry to read until the next `up` re-runs setfacl on it. Until then
+# a tap on that document fails closed with ⚠️ and can be tapped again after
+# `up`. Only operator-owned regular files and directories are touched: setfacl
+# needs the caller to own the file, so a gateway-owned proposal or applied/ dir
+# would fail with EPERM and abort `up`, and the gateway already has owner rights
+# on those, while the parent's default ACL covers the operator. Symlinks are skipped because setfacl follows them, which
 # would grant the gateway whatever they point at outside memory/. .proposals is
 # gitignored and created here because nothing else creates it.
 prepare_memory() {

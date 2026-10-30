@@ -141,3 +141,6 @@ Reads keep working while stopped, on purpose — a gateway that cannot answer
 | Hermes starts but has no tools | Check `deploy/.hermes-config.rendered.yaml` really contains the `mcp_servers` block and no `${...}` placeholders. |
 | Every write needs approval unexpectedly | The session is tainted. `/clear` on the approver bot. |
 | Everything is refused with `audit.unwritable` | The audit log became unwritable and the gateway latched. That is deliberate: if it cannot log, it will not act. Fix the disk, then restart. |
+| Every memory card answers "⚠️ not written: the approver cannot write its audit log" | An approver audit append failed and the approver latched: no approve or reject acts until a restart. Fix the disk, then restart; the proposals are still pending and come back as fresh cards. |
+| A memory tap says "⚠️ not written" with a permission error on a document you created | The file was created `0644`, so its ACL mask is `r--` and the gateway cannot append. `make dev-up` re-runs `setfacl`; tap the same card again. |
+| Duplicate memory cards, older ones answering "that card has expired" | Every gateway start re-posts a card for every pending proposal, and cards from an earlier process are dead. A crash loop posts a set per restart. Tap the newest card. |

@@ -452,7 +452,11 @@ is out of the loop between the proposal and the write, so the tap is the gate, n
 agent and not a file permission. `memory.Store.ApplyApproved` has one caller, the tap
 handler in `internal/approval`, and no MCP tool reaches it. `dev.sh` now grants the gateway
 `rwX` on all of `memory/` except `memory/.git`, with default ACLs on directories for both
-the gateway uid and the operator so each can write what the other creates.
+the gateway uid and the operator. That keeps a document the gateway creates (`0664`)
+writable by the operator. It does not fully cover the other direction: a document the
+operator creates `0644` gets ACL mask `r--`, which cuts the gateway's entry to read, so the
+gateway cannot append to it until the next `make dev-up` re-runs `setfacl`. A tap on it
+fails closed with `⚠️ not written` and keeps its buttons; tap again after `up`.
 
 **The tap still asks `policy.Decide`.** The handler builds a synthetic request — tool
 `memory.apply`, tier 0, kind write — and refuses on `Deny`, so the kill switch and the rate
@@ -460,6 +464,23 @@ limit hold against a tap exactly as against a tool call: a tap does not outrank 
 `NeedApproval`, which taint produces, is treated as satisfied, because the tap is the human
 approval it asks for. Every tap is audited as actor `approver`, tool `memory.apply`, with
 the proposal id and path but never the entry.
+
+**The intent is recorded before the write, and a broken ledger stops the taps.** Before
+`ApplyApproved`, the handler appends a record with decision `allow`, rule
+`memory.tap_approved`, answer `approved` and status `pending`; after the write, a second
+record carries `ok` or the error. If the intent record cannot be appended, nothing is
+written: the card goes to `⚠️ not written` with its buttons, and the proposal stays
+pending. Any failed approver audit append also sets a latch on the bot, and while it is set
+both approve and reject are refused the same way, because a reject moves a file too. Only
+a restart clears it — the approver's counterpart to the gateway's `audit.unwritable`
+latch. A crash between the two records leaves an intent with no outcome, which says "look
+at the document", where writing first would have left a line with no record at all.
+
+**Reject refuses a proposal whose line is already written.** A crash between the append
+and the move leaves the line in the document and the proposal pending. Reject reads the
+document and, if it holds `<!-- proposal <id>,`, refuses with `⚠️ not written: already
+written; approve to finish filing it`, keeping the buttons. Approve does not write the line
+twice, and files the proposal under `applied/`.
 
 **What was approved is the card, not the file.** The handler reloads the proposal and
 refuses the write if its path or entry differs from what the card showed. Otherwise a

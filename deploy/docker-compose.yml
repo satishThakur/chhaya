@@ -18,8 +18,9 @@ services:
     volumes:
       - gateway-data:/data
       # Personal memory is the asset and lives in git, not in a volume. Writable
-      # because memory.propose_update stages proposals under .proposals/ — it
-      # never edits a document, but it does need somewhere to put the proposal.
+      # because memory.propose_update stages proposals under .proposals/, and the
+      # gateway appends to a document only on a human tap on the approver bot,
+      # never from a tool call (docs/decisions.md, 2026-10-30).
       - ../memory:/data/memory
       - ../config/policy.yaml:/etc/chhaya/policy.yaml:ro
       - ./certs:/etc/chhaya/certs:ro
