@@ -360,28 +360,13 @@ func TestOnlyTheTapHandlerApplies(t *testing.T) {
 		}
 		parsed++
 
-		ast.Inspect(f, func(n ast.Node) bool {
-			c, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
+		for _, u := range applyApprovedUses(f) {
+			if want, ok := allowed[filepath.ToSlash(rel)]; ok && (want == "" || want == u.fn) {
+				continue
 			}
-			sel, ok := c.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "ApplyApproved" {
-				return true
-			}
-			fn := ""
-			for _, d := range f.Decls {
-				if fd, ok := d.(*ast.FuncDecl); ok && fd.Pos() <= c.Pos() && c.Pos() <= fd.End() {
-					fn = fd.Name.Name
-				}
-			}
-			if want, ok := allowed[filepath.ToSlash(rel)]; ok && (want == "" || want == fn) {
-				return true
-			}
-			t.Errorf("%s:%d: %s calls ApplyApproved; only the approver's memoryTap may",
-				rel, fset.Position(sel.Sel.Pos()).Line, fn)
-			return true
-		})
+			t.Errorf("%s:%d: %s uses ApplyApproved; only the approver's memoryTap may",
+				rel, fset.Position(u.pos).Line, u.fn)
+		}
 		return nil
 	})
 	if err != nil {
@@ -392,6 +377,33 @@ func TestOnlyTheTapHandlerApplies(t *testing.T) {
 	if parsed < 20 {
 		t.Fatalf("only %d Go files were walked; the walk is not covering the module", parsed)
 	}
+}
+
+type applyUse struct {
+	fn  string // the enclosing function, or "" at package level
+	pos token.Pos
+}
+
+// applyApprovedUses finds every selector naming ApplyApproved, called or
+// not. Matching only call expressions would miss a method value taken here
+// and called somewhere the walk does not attribute to it.
+func applyApprovedUses(f *ast.File) []applyUse {
+	var uses []applyUse
+	ast.Inspect(f, func(n ast.Node) bool {
+		s, ok := n.(*ast.SelectorExpr)
+		if !ok || s.Sel.Name != "ApplyApproved" {
+			return true
+		}
+		fn := ""
+		for _, d := range f.Decls {
+			if fd, ok := d.(*ast.FuncDecl); ok && fd.Pos() <= s.Pos() && s.Pos() <= fd.End() {
+				fn = fd.Name.Name
+			}
+		}
+		uses = append(uses, applyUse{fn: fn, pos: s.Sel.Pos()})
+		return true
+	})
+	return uses
 }
 
 func moduleRoot(t *testing.T) string {
@@ -569,5 +581,197 @@ func TestAProposalChangedAfterTheCardWritesNothing(t *testing.T) {
 	r := lastRecord(t, logPath)
 	if r.Tool != "memory.apply" || r.Result.Status != "error" || !strings.Contains(r.Result.Error, "changed") {
 		t.Errorf("record = %+v, want the refusal recorded as an error", r)
+	}
+}
+
+// The write is preceded by a record of the intent to write, so a document
+// never changes without the ledger saying so first; the record after the
+// write says how it went.
+func TestAnApproveTapRecordsItsIntentBeforeWriting(t *testing.T) {
+	b, tg, _, logPath, _ := memBot(t)
+	p, msgID := propose(t, b, tg, "No okra.", "said so")
+
+	b.handle(context.Background(), memTap(msgID, "mem-approve"))
+
+	recs := records(t, logPath)
+	if len(recs) < 2 {
+		t.Fatalf("%d records, want an intent and a result", len(recs))
+	}
+	intent, done := recs[len(recs)-2], recs[len(recs)-1]
+	for _, r := range []audit.Record{intent, done} {
+		if r.Tool != "memory.apply" || r.Decision != "allow" || r.Rule != "memory.tap_approved" ||
+			r.Approval == nil || r.Approval.Answer != "approved" || !strings.Contains(string(r.Args), p.ID) {
+			t.Errorf("record = %+v", r)
+		}
+	}
+	if intent.Result.Status != "pending" || done.Result.Status != "ok" {
+		t.Errorf("statuses = %q then %q, want pending then ok", intent.Result.Status, done.Result.Status)
+	}
+}
+
+// brokenAudit closes the bot's audit writer, so every append fails.
+func brokenAudit(t *testing.T, b *Bot) {
+	t.Helper()
+	if err := b.audit.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// refusedUnwritten asserts a tap left everything as it was: the document,
+// the pending proposal, and a ⚠️ card that still has both buttons.
+func refusedUnwritten(t *testing.T, b *Bot, tg *fakeTG, msgID int64, id, doc, wantDoc string) {
+	t.Helper()
+	if got := readDoc(t, doc); got != wantDoc {
+		t.Errorf("the document changed:\n%s", got)
+	}
+	if e, _ := tg.edit(msgID); !strings.HasPrefix(e, "⚠️ not written") {
+		t.Errorf("edit = %q", e)
+	}
+	if got := buttonsOn(t, tg, msgID); !slices.Equal(got, []string{"mem-approve", "mem-reject"}) {
+		t.Errorf("card buttons = %v, want both kept", got)
+	}
+	if !isPending(t, b, id) {
+		t.Error("the proposal was resolved")
+	}
+}
+
+// A write the ledger cannot record is not made: if the intent record does
+// not land, the document is not touched.
+func TestAnApproveTapWithABrokenAuditLogWritesNothing(t *testing.T) {
+	b, tg, _, _, doc := memBot(t)
+	p, msgID := propose(t, b, tg, "No okra.", "said so")
+	brokenAudit(t, b)
+
+	b.handle(context.Background(), memTap(msgID, "mem-approve"))
+
+	refusedUnwritten(t, b, tg, msgID, p.ID, doc, foodDoc)
+}
+
+// Once any approver audit append has failed, the ledger has a gap, and no
+// later tap — approve or reject — may act, even if the log would now take
+// the record.
+func TestAfterAFailedAuditAppendEveryTapIsRefused(t *testing.T) {
+	b, tg, _, _, doc := memBot(t)
+	first, firstMsg := propose(t, b, tg, "No okra.", "said so")
+	second, secondMsg := propose(t, b, tg, "No karela.", "said so")
+
+	// The reject moves its file and then cannot record it: the latch is set.
+	brokenAudit(t, b)
+	b.handle(context.Background(), memTap(firstMsg, "mem-reject"))
+	if isPending(t, b, first.ID) {
+		t.Fatal("precondition: the first reject should have gone through")
+	}
+
+	// A working log again. The latch, not the log, must refuse.
+	w, err := audit.Open(filepath.Join(t.TempDir(), "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { w.Close() })
+	b.audit = w
+
+	b.handle(context.Background(), memTap(secondMsg, "mem-approve"))
+	refusedUnwritten(t, b, tg, secondMsg, second.ID, doc, foodDoc)
+
+	b.handle(context.Background(), memTap(secondMsg, "mem-reject"))
+	refusedUnwritten(t, b, tg, secondMsg, second.ID, doc, foodDoc)
+}
+
+// A crash between the append and the move leaves the line written and the
+// proposal pending. Reject must not file a written line as rejected; the
+// card says approve finishes it, and approve does.
+func TestRejectAfterACrashedApproveSaysApproveToFinish(t *testing.T) {
+	b, tg, _, _, doc := memBot(t)
+	p, msgID := propose(t, b, tg, "No okra.", "said so")
+	f, err := os.OpenFile(doc, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("- No okra. <!-- proposal " + p.ID + ", approved 2026-10-30 -->\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	written := readDoc(t, doc)
+
+	b.handle(context.Background(), memTap(msgID, "mem-reject"))
+
+	refusedUnwritten(t, b, tg, msgID, p.ID, doc, written)
+	if e, _ := tg.edit(msgID); e != "⚠️ not written: already written; approve to finish filing it" {
+		t.Errorf("edit = %q", e)
+	}
+
+	b.handle(context.Background(), memTap(msgID, "mem-approve"))
+	if n := strings.Count(readDoc(t, doc), p.ID); n != 1 {
+		t.Errorf("the line appears %d times, want 1", n)
+	}
+	if e, _ := tg.edit(msgID); !strings.HasPrefix(e, "✅ written to") {
+		t.Errorf("edit = %q", e)
+	}
+}
+
+func TestRepostPendingPostsTheGoodOnesPastACorruptFile(t *testing.T) {
+	b, tg, _, _, _ := memBot(t)
+	if _, err := b.mem.Stage("taste/food", "No okra.", "said so", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	const legacyID = "20261001-0123456789abcdef"
+	const corruptID = "20261001-0000000000000000"
+	dir := filepath.Join(b.mem.Root, ".proposals")
+	if err := os.WriteFile(filepath.Join(dir, legacyID+".json"),
+		[]byte(`{"proposal_id":"`+legacyID+`","path":"taste/food","diff":"+ no okra","rationale":"old"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, corruptID+".json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := b.RepostPending(context.Background())
+
+	if err == nil || !strings.Contains(err.Error(), corruptID) {
+		t.Errorf("err = %v, want the corrupt file reported", err)
+	}
+	if n := len(tg.texts()); n != 1 {
+		t.Errorf("%d cards sent, want 1", n)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "legacy", legacyID+".json")); err != nil {
+		t.Errorf("the legacy proposal was not shelved: %v", err)
+	}
+}
+
+// Telegram refuses an answerCallbackQuery text over 200 characters, so a
+// long refusal reason would leave the tap spinning with no answer at all.
+func TestATapAnswerFitsTelegramsLimit(t *testing.T) {
+	long := strings.Repeat("भ", 150) + strings.Repeat("x", 150)
+	got := tapAnswer(long)
+	if n := utf8.RuneCountInString(got); n > 200 {
+		t.Errorf("answer is %d characters, want at most 200", n)
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("answer is not valid UTF-8: %q", got)
+	}
+	if short := "blocked: kill switch active"; tapAnswer(short) != short {
+		t.Errorf("a short reason was changed: %q", tapAnswer(short))
+	}
+}
+
+// The walk must see a method value, not only a call: `f := s.ApplyApproved`
+// followed by f(...) is a second write path all the same.
+func TestApplyApprovedUsesSeesMethodValues(t *testing.T) {
+	src := `package x
+func a(s S) { s.ApplyApproved("id", now) }
+func b(s S) { f := s.ApplyApproved; f("id", now) }
+func c(s S) { run(s.ApplyApproved) }
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "x.go", src, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fns []string
+	for _, u := range applyApprovedUses(f) {
+		fns = append(fns, u.fn)
+	}
+	if !slices.Equal(fns, []string{"a", "b", "c"}) {
+		t.Errorf("uses found in %v, want [a b c]", fns)
 	}
 }

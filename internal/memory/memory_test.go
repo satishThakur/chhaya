@@ -2,6 +2,7 @@ package memory
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,7 +118,7 @@ func TestPendingSplitsLegacyFromReady(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ready, legacy, err := s.Pending()
+	ready, legacy, _, err := s.Pending()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +136,7 @@ func TestPendingSplitsLegacyFromReady(t *testing.T) {
 	if fi.Mode().Perm() != 0o755 {
 		t.Errorf("legacy dir mode = %v, want 0755", fi.Mode().Perm())
 	}
-	ready, legacy, err = s.Pending()
+	ready, legacy, _, err = s.Pending()
 	if err != nil || len(legacy) != 0 || len(ready) != 1 {
 		t.Errorf("after move: ready=%d legacy=%v err=%v", len(ready), legacy, err)
 	}
@@ -429,8 +430,18 @@ func TestDecisionsRefuseAForgedProposalID(t *testing.T) {
 				if _, err := tc.do(s, p.ID); err == nil {
 					t.Fatal("want an error")
 				}
-				if _, err := os.Stat(filepath.Join(filepath.Dir(s.Root), "outside.json")); !os.IsNotExist(err) {
-					t.Errorf("wrote outside the root: %v", err)
+				// A forged "../outside" is joined under .proposals/applied or
+				// .proposals/rejected, so it lands in .proposals itself, not
+				// above the root. Stat every place the forged id could reach.
+				for _, hit := range []string{
+					filepath.Join(s.Root, ".proposals", "applied", "..", "outside.json"),
+					filepath.Join(s.Root, ".proposals", "rejected", "..", "outside.json"),
+					filepath.Join(s.Root, "outside.json"),
+					filepath.Join(filepath.Dir(s.Root), "outside.json"),
+				} {
+					if _, err := os.Stat(hit); !os.IsNotExist(err) {
+						t.Errorf("forged id wrote %s: %v", hit, err)
+					}
 				}
 				if readFile(t, doc) != before {
 					t.Error("document changed")
@@ -453,5 +464,103 @@ func TestApplyTitleIsRuneSafe(t *testing.T) {
 	}
 	if got := readFile(t, filepath.Join(s.Root, "taste", "éclair.md")); !strings.HasPrefix(got, "# Éclair\n\n") {
 		t.Errorf("doc = %q", got)
+	}
+}
+
+// A legacy proposal was written 0600 by the gateway's uid. Shelving it must
+// also make it readable, or the operator still cannot see what it said.
+func TestMoveLegacyLeavesTheFileReadable(t *testing.T) {
+	s, _ := newRoot(t)
+	if err := os.MkdirAll(filepath.Join(s.Root, ".proposals"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const legacyID = "20261029-688f393323e57be8"
+	raw := `{"proposal_id":"` + legacyID + `","path":"taste/food","diff":"x","rationale":"x"}`
+	src := filepath.Join(s.Root, ".proposals", legacyID+".json")
+	if err := os.WriteFile(src, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(src, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.MoveLegacy(legacyID); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(filepath.Join(s.Root, ".proposals", "legacy", legacyID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o644 {
+		t.Errorf("shelved proposal mode = %v, want 0644", fi.Mode().Perm())
+	}
+}
+
+// A crash between the append and the move leaves the line in the document
+// and the proposal pending. Rejecting it then would file as rejected a line
+// that is in memory, so Reject refuses and approve finishes the filing.
+func TestRejectRefusesAProposalAlreadyWritten(t *testing.T) {
+	s, doc := newRoot(t)
+	p := stage(t, s, "taste/food", "No okra.")
+	f, err := os.OpenFile(doc, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(line(p.ID, "No okra.")); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	before := readFile(t, doc)
+
+	if _, err := s.Reject(p.ID, t1030); !errors.Is(err, ErrAlreadyWritten) {
+		t.Fatalf("Reject = %v, want ErrAlreadyWritten", err)
+	}
+	if readFile(t, doc) != before {
+		t.Error("document changed")
+	}
+	if _, err := os.Stat(filepath.Join(s.Root, ".proposals", p.ID+".json")); err != nil {
+		t.Errorf("proposal not left pending: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(s.Root, ".proposals", "rejected", p.ID+".json")); !os.IsNotExist(err) {
+		t.Errorf("filed as rejected: %v", err)
+	}
+
+	// Approve is the way out: it sees the line, does not write it twice, and files it.
+	if _, err := s.ApplyApproved(p.ID, t1030); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(readFile(t, doc), p.ID); n != 1 {
+		t.Errorf("id appears %d times; want 1", n)
+	}
+}
+
+// One unreadable proposal must not hide the others: a restart would then
+// re-post no card and shelve no legacy file at all.
+func TestPendingSkipsACorruptProposal(t *testing.T) {
+	s, _ := newRoot(t)
+	good := stage(t, s, "taste/food", "No okra.")
+	const legacyID = "20261029-688f393323e57be8"
+	const corruptID = "20261029-0000000000000000"
+	write := func(id, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(s.Root, ".proposals", id+".json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(legacyID, `{"proposal_id":"`+legacyID+`","path":"taste/food","diff":"x","rationale":"x"}`)
+	write(corruptID, `{not json`)
+
+	ready, legacy, skipped, err := s.Pending()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ready) != 1 || ready[0].ID != good.ID {
+		t.Errorf("ready = %v, want only %s", ready, good.ID)
+	}
+	if len(legacy) != 1 || legacy[0] != legacyID {
+		t.Errorf("legacy = %v", legacy)
+	}
+	if len(skipped) != 1 || !strings.Contains(skipped[0].Error(), corruptID) {
+		t.Errorf("skipped = %v, want the corrupt file named", skipped)
 	}
 }

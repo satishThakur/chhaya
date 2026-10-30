@@ -6,6 +6,7 @@ import (
 	"html"
 	"os"
 	"time"
+	"unicode/utf8"
 
 	"github.com/satishthakur/chhaya/internal/audit"
 	"github.com/satishthakur/chhaya/internal/memory"
@@ -47,13 +48,20 @@ func (b *Bot) ProposeMemory(ctx context.Context, p memory.Proposal) error {
 // RepostPending cards every proposal still waiting on disk. The waiting map
 // does not survive a restart; the proposals do, so this is how they become
 // tappable again. Proposals from before entries existed cannot be applied and
-// are shelved instead of carded.
+// are shelved instead of carded. A proposal file that will not load is
+// reported and left where it is; the rest are still carded.
 func (b *Bot) RepostPending(ctx context.Context) error {
-	ready, legacy, err := b.mem.Pending()
+	ready, legacy, skipped, err := b.mem.Pending()
 	if err != nil {
 		return err
 	}
 	var first error
+	for _, err := range skipped {
+		fmt.Fprintf(os.Stderr, "approver bot: could not load a pending proposal: %v; it stays in .proposals\n", err)
+		if first == nil {
+			first = err
+		}
+	}
 	for _, id := range legacy {
 		if err := b.mem.MoveLegacy(id); err != nil {
 			fmt.Fprintf(os.Stderr, "approver bot: could not shelve legacy proposal %s: %v\n", id, err)
@@ -104,10 +112,24 @@ func (b *Bot) memoryTap(ctx context.Context, c *Callback, approve bool) {
 	}
 	now := time.Now()
 
+	// Fail closed: once an approver audit record has failed to land, the
+	// ledger has a gap, and neither a write nor a reject's move is made
+	// without a record. Both verbs are refused until a restart.
+	if b.auditBroken.Load() {
+		release()
+		fmt.Fprintf(os.Stderr, "CRITICAL: approver refused a memory tap on proposal %s: the audit log is not writable\n", id)
+		b.tg.AnswerCallback(ctx, c.ID, "not written")
+		b.memoryFailed(ctx, msgID, "the approver cannot write its audit log; restart the gateway")
+		return
+	}
+
 	if !approve {
 		p, err := b.mem.Reject(id, now)
 		if err != nil {
 			release()
+			// memory.ErrAlreadyWritten lands here too: its text is the card's
+			// "already written; approve to finish filing it", and the buttons
+			// stay so approve can do exactly that.
 			b.memoryRecord(id, carded.Path, "deny", "memory.tap_rejected", "rejected by the approver",
 				"denied_by_user", audit.Result{Status: "error", Error: err.Error()})
 			b.tg.AnswerCallback(ctx, c.ID, "not rejected")
@@ -135,7 +157,7 @@ func (b *Bot) memoryTap(ctx context.Context, c *Callback, approve bool) {
 			"approved", audit.Result{Status: "refused"})
 		// The card keeps its buttons: once the reason is lifted, the same
 		// card is tapped again.
-		b.tg.AnswerCallback(ctx, c.ID, d.Reason)
+		b.tg.AnswerCallback(ctx, c.ID, tapAnswer(d.Reason))
 		return
 	}
 
@@ -162,6 +184,20 @@ func (b *Bot) memoryTap(ctx context.Context, c *Callback, approve bool) {
 			"approved", audit.Result{Status: "error", Error: err.Error()})
 		b.tg.AnswerCallback(ctx, c.ID, "not written")
 		b.memoryFailed(ctx, msgID, "the gateway cannot record this call")
+		return
+	}
+
+	// The ledger says a write is about to happen before it does. If that
+	// record cannot land, nothing is written: a document must never hold a
+	// line the ledger has no record of. A crash after this record and
+	// before the result leaves an intent with no outcome, which reads as
+	// "look at the document", not as silence.
+	if err := b.memoryRecord(id, carded.Path, "allow", "memory.tap_approved", "approved by the approver",
+		"approved", audit.Result{Status: "pending"}); err != nil {
+		release()
+		fmt.Fprintf(os.Stderr, "CRITICAL: approver did not write proposal %s: its intent record failed: %v\n", id, err)
+		b.tg.AnswerCallback(ctx, c.ID, "not written")
+		b.memoryFailed(ctx, msgID, "the approver cannot write its audit log; restart the gateway")
 		return
 	}
 
@@ -193,12 +229,22 @@ func (b *Bot) memoryFailed(ctx context.Context, msgID int64, reason string) {
 // memoryRecord writes a tap's audit record. The args never carry the entry:
 // the ledger says which proposal and which document, and the proposal file
 // in applied/ or rejected/ holds the words.
-func (b *Bot) memoryRecord(id, path, decision, rule, reason, answer string, res audit.Result) {
-	b.appendRecord(audit.Record{
+func (b *Bot) memoryRecord(id, path, decision, rule, reason, answer string, res audit.Result) error {
+	return b.appendRecord(audit.Record{
 		Actor: "approver", Tool: memoryTool, Kind: policy.Write.String(), Tier: int(policy.TierInternal),
 		Args:     audit.MarshalArgs(map[string]any{"proposal_id": id, "path": path}),
 		Decision: decision, Rule: rule, Reason: reason,
 		Approval: &audit.Approval{Answer: answer},
 		Result:   res,
 	})
+}
+
+// tapAnswer fits a reason into an answerCallbackQuery text. Telegram refuses
+// one over 200 characters, and a refused answer leaves the tap spinning with
+// no word at all. 199 bytes leaves room for the ellipsis truncate adds.
+func tapAnswer(reason string) string {
+	if utf8.RuneCountInString(reason) <= 200 {
+		return reason
+	}
+	return truncate(reason, 199)
 }

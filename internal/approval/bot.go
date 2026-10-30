@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -80,6 +81,12 @@ type Bot struct {
 	mu         sync.Mutex
 	waiting    map[int64]*pending        // keyed by the card's message id
 	memWaiting map[int64]memory.Proposal // memory card message id → the proposal it shows
+
+	// auditBroken is set by the first audit append that fails and is never
+	// cleared in-process. After it, the ledger has a gap, so no memory tap
+	// acts until a restart: the approver's counterpart to the gateway's own
+	// latch in mcpsrv.
+	auditBroken atomic.Bool
 
 	// unreachableAfter is injectable so a test can prove the CRITICAL record
 	// fires without waiting out the production threshold. NewBot sets the
@@ -406,10 +413,13 @@ func (b *Bot) auditRejectedSender(senderID int64, kind, payload string) {
 	})
 }
 
-func (b *Bot) appendRecord(r audit.Record) {
+func (b *Bot) appendRecord(r audit.Record) error {
 	if _, err := b.audit.Append(r); err != nil {
+		b.auditBroken.Store(true)
 		fmt.Printf("CRITICAL: approver could not write an audit record: %v\n", err)
+		return err
 	}
+	return nil
 }
 
 func onOff(b bool) string {

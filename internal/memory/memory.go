@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,11 @@ import (
 )
 
 const maxEntryRunes = 200
+
+// ErrAlreadyWritten is Reject's refusal for a proposal whose line is already
+// in its document: a crash between the append and the move left it pending.
+// Approve finishes the filing; reject would file a written line as rejected.
+var ErrAlreadyWritten = errors.New("already written; approve to finish filing it")
 
 // Resolve resolves a document path inside the memory root and refuses
 // anything that leaves it, including a path whose final component does not
@@ -194,14 +200,16 @@ func (s Store) Remove(id string) error {
 
 // Pending lists the proposals sitting directly in .proposals, sorted by ID.
 // A file with an entry is ready to card; one without predates entries and is
-// reported by ID in legacy.
-func (s Store) Pending() (ready []Proposal, legacy []string, err error) {
+// reported by ID in legacy. A file that will not load is reported in skipped
+// and does not stop the rest: one corrupt file must not leave every other
+// proposal without a card. err is only for a directory that cannot be read.
+func (s Store) Pending() (ready []Proposal, legacy []string, skipped []error, err error) {
 	files, err := os.ReadDir(s.dir())
 	if os.IsNotExist(err) {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	for _, f := range files {
 		name := f.Name()
@@ -211,7 +219,8 @@ func (s Store) Pending() (ready []Proposal, legacy []string, err error) {
 		}
 		p, err := s.Load(id)
 		if err != nil {
-			return nil, nil, err
+			skipped = append(skipped, err)
+			continue
 		}
 		if p.Entry == "" {
 			legacy = append(legacy, id)
@@ -221,7 +230,7 @@ func (s Store) Pending() (ready []Proposal, legacy []string, err error) {
 	}
 	sort.Slice(ready, func(i, j int) bool { return ready[i].ID < ready[j].ID })
 	sort.Strings(legacy)
-	return ready, legacy, nil
+	return ready, legacy, skipped, nil
 }
 
 // MoveLegacy sets a pre-entry proposal aside under .proposals/legacy.
@@ -229,11 +238,17 @@ func (s Store) MoveLegacy(id string) error {
 	if !idPattern.MatchString(id) {
 		return fmt.Errorf("invalid proposal id %q", id)
 	}
-	dst := filepath.Join(s.dir(), "legacy")
-	if err := mkdir(dst); err != nil {
+	dir := filepath.Join(s.dir(), "legacy")
+	if err := mkdir(dir); err != nil {
 		return err
 	}
-	return os.Rename(filepath.Join(s.dir(), id+".json"), filepath.Join(dst, id+".json"))
+	dst := filepath.Join(dir, id+".json")
+	if err := os.Rename(filepath.Join(s.dir(), id+".json"), dst); err != nil {
+		return err
+	}
+	// Legacy files were written 0600 by the gateway's uid; a rename keeps the
+	// mode, and the operator could still not read what was shelved.
+	return os.Chmod(dst, 0o644)
 }
 
 // ApplyApproved appends an approved proposal's entry to its document and
@@ -261,13 +276,35 @@ func (s Store) ApplyApproved(id string, now time.Time) (Proposal, error) {
 	return s.move(id, p, "applied", "approved", now)
 }
 
-// Reject moves a proposal to .proposals/rejected. It never opens the document.
+// Reject moves a proposal to .proposals/rejected. It reads the document, never
+// writes it: a proposal whose line is already there is refused with
+// ErrAlreadyWritten. A path that does not resolve is not an error here — no
+// apply could have written through it, and refusing would leave a forged path
+// with no way off the queue.
 func (s Store) Reject(id string, now time.Time) (Proposal, error) {
 	p, err := s.Load(id)
 	if err != nil {
 		return Proposal{}, err
 	}
+	if doc, err := Resolve(s.Root, p.Path); err == nil {
+		existing, err := os.ReadFile(doc)
+		switch {
+		case err == nil:
+			if written(existing, id) {
+				return Proposal{}, ErrAlreadyWritten
+			}
+		case !os.IsNotExist(err):
+			// Fail closed: a document that cannot be read cannot be shown
+			// not to hold the line.
+			return Proposal{}, err
+		}
+	}
 	return s.move(id, p, "rejected", "rejected", now)
+}
+
+// written reports whether a document already holds proposal id's line.
+func written(doc []byte, id string) bool {
+	return strings.Contains(string(doc), "<!-- proposal "+id+",")
 }
 
 // appendEntry writes the provenance-stamped line with O_APPEND, never
@@ -310,7 +347,7 @@ func appendEntry(doc, id, entry string, now time.Time) error {
 
 	// A crash after the append and before the move leaves the line behind;
 	// a retry must not write it twice.
-	if strings.Contains(string(existing), "<!-- proposal "+id+",") {
+	if written(existing, id) {
 		return nil
 	}
 	// The newline and the line go in one Write so a crash cannot leave a
