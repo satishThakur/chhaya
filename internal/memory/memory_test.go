@@ -564,3 +564,43 @@ func TestPendingSkipsACorruptProposal(t *testing.T) {
 		t.Errorf("skipped = %v, want the corrupt file named", skipped)
 	}
 }
+
+// In production .proposals/ is created by dev.sh, owned by the operator, and
+// carries the gateway's ACL. The gateway is not its owner, so chmod on it is
+// EPERM — and if it were permitted, forcing 0755 would rewrite the ACL mask to
+// r-x and take write away from the gateway itself. A directory that already
+// exists is not ours to re-mode. Tests run as the owner, so the EPERM cannot be
+// reproduced here; an unchanged mode is the observable proof that no chmod ran.
+func TestExistingProposalDirectoriesKeepTheirMode(t *testing.T) {
+	s, _ := newRoot(t)
+	for _, d := range []string{s.dir(), filepath.Join(s.dir(), "applied"), filepath.Join(s.dir(), "legacy")} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(d, 0o775); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	p := stage(t, s, "taste/food", "No okra.")
+	if _, err := s.ApplyApproved(p.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(s.dir(), "20261029-688f393323e57be8.json")
+	if err := os.WriteFile(legacy, []byte(`{"proposal_id":"20261029-688f393323e57be8","path":"taste/food","diff":"x","rationale":"x","proposed_at":"2026-10-29T16:46:51Z"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MoveLegacy("20261029-688f393323e57be8"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, d := range []string{s.dir(), filepath.Join(s.dir(), "applied"), filepath.Join(s.dir(), "legacy")} {
+		fi, err := os.Stat(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fi.Mode().Perm(); got != 0o775 {
+			t.Errorf("%s mode = %o, want 0775 left alone: an existing directory must not be chmod'd", d, got)
+		}
+	}
+}

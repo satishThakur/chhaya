@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -125,9 +126,19 @@ func newID(now time.Time) (string, error) {
 	return now.UTC().Format("20060102") + "-" + hex.EncodeToString(b), nil
 }
 
-// mkdir creates dir and forces its mode, because MkdirAll honours the umask.
+// mkdir creates dir and forces its mode, because Mkdir honours the umask. It
+// re-modes only a directory it just created. An existing one — .proposals/
+// itself, made by dev.sh — is owned by the operator and carries the gateway's
+// ACL: chmod there is EPERM for the gateway, and if it were allowed, forcing
+// 0755 would rewrite the ACL mask to r-x and revoke the gateway's own write.
 func mkdir(dir string) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return err
+	}
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return nil
+		}
 		return err
 	}
 	return os.Chmod(dir, 0o755)
