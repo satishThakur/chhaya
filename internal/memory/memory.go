@@ -229,3 +229,111 @@ func (s Store) MoveLegacy(id string) error {
 	}
 	return os.Rename(filepath.Join(s.dir(), id+".json"), filepath.Join(dst, id+".json"))
 }
+
+// ApplyApproved appends an approved proposal's entry to its document and
+// moves the proposal to .proposals/applied. It is the only function that
+// writes a memory document. The file is never trusted: the entry and path
+// are revalidated, so a proposal edited on disk cannot escape the root or
+// break out of its line. Any error before the move leaves the proposal
+// pending.
+func (s Store) ApplyApproved(id string, now time.Time) (Proposal, error) {
+	p, err := s.Load(id)
+	if err != nil {
+		return Proposal{}, err
+	}
+	entry, err := ValidateEntry(p.Entry)
+	if err != nil {
+		return Proposal{}, err
+	}
+	doc, err := Resolve(s.Root, p.Path)
+	if err != nil {
+		return Proposal{}, err
+	}
+	if err := appendEntry(doc, id, entry, now); err != nil {
+		return Proposal{}, err
+	}
+	return s.move(p, "applied", "approved", now)
+}
+
+// Reject moves a proposal to .proposals/rejected. It never opens the document.
+func (s Store) Reject(id string, now time.Time) (Proposal, error) {
+	p, err := s.Load(id)
+	if err != nil {
+		return Proposal{}, err
+	}
+	return s.move(p, "rejected", "rejected", now)
+}
+
+// appendEntry writes the provenance-stamped line with O_APPEND, never
+// temp-file-and-rename, so the inode and any concurrent writer survive.
+func appendEntry(doc, id, entry string, now time.Time) error {
+	stamped := fmt.Sprintf("- %s <!-- proposal %s, approved %s -->\n", entry, id, now.UTC().Format("2006-01-02"))
+
+	existing, err := os.ReadFile(doc)
+	switch {
+	case os.IsNotExist(err):
+		title := filepath.Base(strings.TrimSuffix(doc, ".md"))
+		title = strings.ToUpper(title[:1]) + title[1:]
+		f, err := os.OpenFile(doc, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o664)
+		if err != nil {
+			return err
+		}
+		// The umask would otherwise leave 0644, and the agent's worker is another user.
+		if err := os.Chmod(doc, 0o664); err != nil {
+			f.Close()
+			return err
+		}
+		if _, err := f.WriteString("# " + title + "\n\n" + stamped); err != nil {
+			f.Close()
+			return err
+		}
+		return f.Close()
+	case err != nil:
+		return err
+	}
+
+	// A crash after the append and before the move leaves the line behind;
+	// a retry must not write it twice.
+	if strings.Contains(string(existing), "<!-- proposal "+id+",") {
+		return nil
+	}
+	// The newline and the line go in one Write so a crash cannot leave a
+	// bare newline behind.
+	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+		stamped = "\n" + stamped
+	}
+	f, err := os.OpenFile(doc, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(stamped); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// move records the decision in sub/<id>.json and removes the pending file.
+func (s Store) move(p Proposal, sub, decision string, now time.Time) (Proposal, error) {
+	p.Decision = decision
+	p.DecidedAt = now.UTC().Format(time.RFC3339)
+	body, err := json.Marshal(p)
+	if err != nil {
+		return Proposal{}, err
+	}
+	dir := filepath.Join(s.dir(), sub)
+	if err := mkdir(dir); err != nil {
+		return Proposal{}, err
+	}
+	file := filepath.Join(dir, p.ID+".json")
+	if err := os.WriteFile(file, body, 0o644); err != nil {
+		return Proposal{}, err
+	}
+	if err := os.Chmod(file, 0o644); err != nil {
+		return Proposal{}, err
+	}
+	if err := s.Remove(p.ID); err != nil {
+		return Proposal{}, err
+	}
+	return p, nil
+}
