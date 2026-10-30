@@ -66,6 +66,32 @@ traversable_by() {
   return 1
 }
 
+# writable_dir_by DIR UID -> true if that uid can create files in DIR (w and x).
+writable_dir_by() {
+  local d="$1" uid="$2" mode
+  getfacl -p "$d" 2>/dev/null | grep -qE "^user:${uid}:.wx" && return 0
+  mode="$(stat -c '%a' "$d" 2>/dev/null)" || return 1
+  case "${mode: -1}" in 3|7) return 0 ;; esac
+  if [ "$(stat -c '%g' "$d" 2>/dev/null)" = "$uid" ]; then
+    case "${mode: -2:1}" in 3|7) return 0 ;; esac
+  fi
+  return 1
+}
+
+# memory.propose_update stages proposals in memory/.proposals/, inside a bind mount
+# of the host's memory/ — owned by the operator, so the gateway (uid 10001) gets
+# "mkdir /data/memory/.proposals: permission denied". The grant is on .proposals
+# ONLY, never on memory/ itself: propose_update promises it never edits a document,
+# and leaving the documents unwritable to the gateway makes the filesystem hold that
+# promise too. Gitignored; created here because nothing else creates it.
+prepare_proposals() {
+  local guid d="$ROOT/memory/.proposals"; guid="$(gateway_uid)"
+  [ -n "$guid" ] || { ylw "could not read the gateway uid — not granting memory/.proposals"; return 0; }
+  mkdir -p "$d"
+  setfacl -m "u:${guid}:rwx" "$d"
+  writable_dir_by "$d" "$guid" || die "setfacl on memory/.proposals did not take — propose_update will fail"
+}
+
 preflight() {
   local fail=0
 
@@ -159,6 +185,15 @@ preflight() {
     fi
   fi
 
+  # --- the gateway can stage memory proposals -------------------------------
+  # `make dev-up` creates and grants this; here we only check. Missing is fine
+  # before the first `up`; present but unwritable means propose_update fails.
+  if [ -n "$guid" ] && [ -d "$ROOT/memory/.proposals" ] && ! writable_dir_by "$ROOT/memory/.proposals" "$guid"; then
+    red "memory/.proposals is not writable by uid $guid, so memory.propose_update will fail."
+    red "  setfacl -m u:${guid}:rwx $ROOT/memory/.proposals"
+    fail=1
+  fi
+
   [ "$fail" -eq 0 ] || return 1
   grn "preflight ok"
 }
@@ -240,6 +275,7 @@ cmd_certs() {
 }
 
 cmd_up() {
+  prepare_proposals
   preflight || die "preflight failed — nothing was started"
   render_config
   build_ca_bundle
