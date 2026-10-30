@@ -28,9 +28,10 @@ type fakeTG struct {
 	sendErr       error
 	getChatOK     bool
 	answered      []string
-	answerTexts   []string         // parallel to answered: what each tap was told
-	edits         map[int64]string // message id → its latest edited text
-	getUpdatesErr error            // non-nil: GetUpdates always fails, for the channel-unreachable test
+	answerTexts   []string             // parallel to answered: what each tap was told
+	edits         map[int64]string     // message id → its latest edited text
+	keyboards     map[int64][][]Button // message id → the keyboard it carries now
+	getUpdatesErr error                // non-nil: GetUpdates always fails, for the channel-unreachable test
 	// reply, if set, is the callback this fake produces the moment a card is sent.
 	reply func(messageID int64) *Update
 	out   chan Update
@@ -64,10 +65,16 @@ func (f *fakeTG) SendMessage(_ context.Context, _ int64, text string, _ [][]Butt
 
 // AttachKeyboard is where the fake produces its tap, because that is the
 // point at which the real bot has a message id and a matching token.
-func (f *fakeTG) AttachKeyboard(_ context.Context, _ int64, messageID int64, _ [][]Button) error {
+func (f *fakeTG) AttachKeyboard(_ context.Context, _ int64, messageID int64, buttons [][]Button) error {
 	if f.sendErr != nil {
 		return f.sendErr
 	}
+	f.mu.Lock()
+	if f.keyboards == nil {
+		f.keyboards = map[int64][][]Button{}
+	}
+	f.keyboards[messageID] = buttons
+	f.mu.Unlock()
 	if f.reply != nil {
 		if u := f.reply(messageID); u != nil {
 			f.out <- *u
@@ -84,13 +91,17 @@ func (f *fakeTG) AnswerCallback(_ context.Context, id, text string) error {
 	return nil
 }
 
-func (f *fakeTG) EditMessage(_ context.Context, _ int64, messageID int64, text string) error {
+func (f *fakeTG) EditMessage(_ context.Context, _ int64, messageID int64, text string, buttons [][]Button) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.edits == nil {
 		f.edits = map[int64]string{}
 	}
+	if f.keyboards == nil {
+		f.keyboards = map[int64][][]Button{}
+	}
 	f.edits[messageID] = text
+	f.keyboards[messageID] = buttons
 	return nil
 }
 

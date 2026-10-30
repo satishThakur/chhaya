@@ -78,8 +78,8 @@ type Bot struct {
 	mem memory.Store
 
 	mu         sync.Mutex
-	waiting    map[int64]*pending // keyed by the card's message id
-	memWaiting map[int64]string   // memory card message id → proposal id
+	waiting    map[int64]*pending        // keyed by the card's message id
+	memWaiting map[int64]memory.Proposal // memory card message id → the proposal it shows
 
 	// unreachableAfter is injectable so a test can prove the CRITICAL record
 	// fires without waiting out the production threshold. NewBot sets the
@@ -98,7 +98,7 @@ type Bot struct {
 func NewBot(tg Telegram, chatID int64, st *state.Store, w *audit.Writer, timeout time.Duration, cfg policy.Config, mem memory.Store) *Bot {
 	return &Bot{
 		tg: tg, chatID: chatID, state: st, audit: w, timeout: timeout, cfg: cfg, mem: mem,
-		waiting: map[int64]*pending{}, memWaiting: map[int64]string{},
+		waiting: map[int64]*pending{}, memWaiting: map[int64]memory.Proposal{},
 		unreachableAfter: defaultUnreachableAfter,
 	}
 }

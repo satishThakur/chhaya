@@ -2,6 +2,7 @@ package approval
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -419,5 +420,154 @@ func TestALongNonLatinRationaleStaysValidUTF8(t *testing.T) {
 
 	if card := tg.texts()[0]; !utf8.ValidString(card) {
 		t.Errorf("the card is not valid UTF-8:\n%q", card)
+	}
+}
+
+// buttonsOn returns the verbs on msgID's keyboard, failing the test if any
+// button carries a token that would not pass tap()'s check.
+func buttonsOn(t *testing.T, tg *fakeTG, msgID int64) []string {
+	t.Helper()
+	tg.mu.Lock()
+	defer tg.mu.Unlock()
+	var verbs []string
+	for _, row := range tg.keyboards[msgID] {
+		for _, btn := range row {
+			verb, tok, _ := strings.Cut(btn.Data, ":")
+			if tok != callbackToken(msgID) {
+				t.Errorf("button %q carries a token for another message", btn.Data)
+			}
+			verbs = append(verbs, verb)
+		}
+	}
+	return verbs
+}
+
+func TestAnAnsweredCardLosesItsButtons(t *testing.T) {
+	b, tg, _, _, _ := memBot(t)
+	_, msgID := propose(t, b, tg, "No okra.", "said so")
+	if got := buttonsOn(t, tg, msgID); !slices.Equal(got, []string{"mem-approve", "mem-reject"}) {
+		t.Fatalf("precondition: card buttons = %v", got)
+	}
+
+	b.handle(context.Background(), memTap(msgID, "mem-approve"))
+
+	if got := buttonsOn(t, tg, msgID); len(got) != 0 {
+		t.Errorf("a written card still has buttons %v", got)
+	}
+}
+
+// A write that failed for a reason the human can fix must leave a card they
+// can tap again, not one that says "not written" and offers nothing.
+func TestAFailedApproveKeepsTheButtonsAndCanBeRetried(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file modes, so the write cannot be made to fail")
+	}
+	b, tg, _, _, doc := memBot(t)
+	p, msgID := propose(t, b, tg, "No okra.", "said so")
+	if err := os.Chmod(doc, 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	b.handle(context.Background(), memTap(msgID, "mem-approve"))
+
+	if readDoc(t, doc) != foodDoc {
+		t.Fatalf("a failed write changed the document:\n%s", readDoc(t, doc))
+	}
+	if e, _ := tg.edit(msgID); !strings.HasPrefix(e, "⚠️ not written") {
+		t.Errorf("edit = %q", e)
+	}
+	if got := buttonsOn(t, tg, msgID); !slices.Equal(got, []string{"mem-approve", "mem-reject"}) {
+		t.Errorf("after a failed write the card has buttons %v, want both back", got)
+	}
+	if !isPending(t, b, p.ID) {
+		t.Error("a failed write resolved the proposal")
+	}
+
+	if err := os.Chmod(doc, 0o664); err != nil {
+		t.Fatal(err)
+	}
+	b.handle(context.Background(), memTap(msgID, "mem-approve"))
+
+	if n := strings.Count(readDoc(t, doc), "No okra."); n != 1 {
+		t.Errorf("after the retry the line appears %d times, want 1", n)
+	}
+	if e, _ := tg.edit(msgID); !strings.HasPrefix(e, "✅ written to") {
+		t.Errorf("retry edit = %q", e)
+	}
+}
+
+func TestAFailedRejectKeepsTheButtonsAndCanBeRetried(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file modes, so the reject cannot be made to fail")
+	}
+	b, tg, _, _, doc := memBot(t)
+	p, msgID := propose(t, b, tg, "No okra.", "said so")
+	dir := filepath.Join(b.mem.Root, ".proposals")
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+
+	b.handle(context.Background(), memTap(msgID, "mem-reject"))
+
+	if e, _ := tg.edit(msgID); !strings.HasPrefix(e, "⚠️ not written") {
+		t.Errorf("edit = %q", e)
+	}
+	if got := buttonsOn(t, tg, msgID); !slices.Equal(got, []string{"mem-approve", "mem-reject"}) {
+		t.Errorf("after a failed reject the card has buttons %v, want both back", got)
+	}
+	if !isPending(t, b, p.ID) {
+		t.Error("a failed reject resolved the proposal")
+	}
+
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b.handle(context.Background(), memTap(msgID, "mem-reject"))
+
+	if e, _ := tg.edit(msgID); !strings.HasPrefix(e, "❌ rejected") {
+		t.Errorf("retry edit = %q", e)
+	}
+	if isPending(t, b, p.ID) {
+		t.Error("the retried reject left the proposal pending")
+	}
+	if readDoc(t, doc) != foodDoc {
+		t.Errorf("a reject touched the document:\n%s", readDoc(t, doc))
+	}
+}
+
+// What the human approves must be what lands in the file. A proposal edited
+// on disk after its card went out is refused, not applied.
+func TestAProposalChangedAfterTheCardWritesNothing(t *testing.T) {
+	b, tg, _, logPath, doc := memBot(t)
+	p, msgID := propose(t, b, tg, "No okra.", "said so")
+
+	changed := p
+	changed.Entry = "Okra is fine."
+	body, err := json.Marshal(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(b.mem.Root, ".proposals", p.ID+".json"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	b.handle(context.Background(), memTap(msgID, "mem-approve"))
+
+	if readDoc(t, doc) != foodDoc {
+		t.Fatalf("a changed proposal was applied:\n%s", readDoc(t, doc))
+	}
+	if e, _ := tg.edit(msgID); !strings.HasPrefix(e, "⚠️ not written") || !strings.Contains(e, "changed after this card was shown") {
+		t.Errorf("edit = %q", e)
+	}
+	if got := buttonsOn(t, tg, msgID); !slices.Equal(got, []string{"mem-approve", "mem-reject"}) {
+		t.Errorf("card buttons = %v, want both kept", got)
+	}
+	if !isPending(t, b, p.ID) {
+		t.Error("a changed proposal was resolved")
+	}
+	r := lastRecord(t, logPath)
+	if r.Tool != "memory.apply" || r.Result.Status != "error" || !strings.Contains(r.Result.Error, "changed") {
+		t.Errorf("record = %+v, want the refusal recorded as an error", r)
 	}
 }

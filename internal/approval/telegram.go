@@ -58,9 +58,10 @@ type Telegram interface {
 	// until the message does — so the keyboard cannot go out with it.
 	AttachKeyboard(ctx context.Context, chatID, messageID int64, buttons [][]Button) error
 	AnswerCallback(ctx context.Context, callbackID, text string) error
-	// EditMessage replaces a message's text and removes its keyboard, so a
-	// card that has been answered cannot be tapped again.
-	EditMessage(ctx context.Context, chatID, messageID int64, text string) error
+	// EditMessage replaces a message's text and its keyboard. No buttons
+	// removes the keyboard, so a card that has been answered cannot be
+	// tapped again; a card whose tap failed passes its buttons back.
+	EditMessage(ctx context.Context, chatID, messageID int64, text string, buttons [][]Button) error
 	GetUpdates(ctx context.Context, offset int64, timeout time.Duration) ([]Update, error)
 }
 
@@ -154,10 +155,12 @@ func (t *httpTG) AnswerCallback(ctx context.Context, id, text string) error {
 	return t.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": id, "text": text}, nil)
 }
 
-func (t *httpTG) EditMessage(ctx context.Context, chatID, messageID int64, text string) error {
+func (t *httpTG) EditMessage(ctx context.Context, chatID, messageID int64, text string, buttons [][]Button) error {
+	// keyboard(nil) is an empty array, not null: Telegram removes the
+	// keyboard only when it is told to, and leaves it on a missing field.
 	return t.call(ctx, "editMessageText", map[string]any{
 		"chat_id": chatID, "message_id": messageID, "text": text, "parse_mode": "HTML",
-		"reply_markup": map[string]any{"inline_keyboard": [][]map[string]string{}},
+		"reply_markup": map[string]any{"inline_keyboard": keyboard(buttons)},
 	}, nil)
 }
 
