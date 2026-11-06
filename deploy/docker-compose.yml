@@ -37,7 +37,13 @@ services:
     # gateway — what serves Telegram — and the image's own help names it the Docker mode.
     command: ["gateway", "run"]
     volumes:
-      - hermes-data:/data        # NOT :ro — Hermes creates cron/ at init and fails on a read-only home
+      # Hermes' whole state: memories/, skills/, state.db, sessions, .env. A bind mount
+      # of a host directory (the layout Hermes' own Docker docs use), not a named
+      # volume, so it outlives Docker: `down -v` and `volume prune` cannot reach it and
+      # an ordinary host backup covers it. scripts/dev.sh sets the path, creates it 0700,
+      # and sets HERMES_UID/HERMES_GID to the operator so files here are the operator's.
+      # NOT :ro — Hermes creates cron/ at init and fails on a read-only home.
+      - ${CHHAYA_HERMES_HOME:?run through scripts/dev.sh (make dev-up)}:/data
       # Rendered by scripts/dev.sh from hermes/config.yaml with the model values
       # substituted. Mounted read-only, and it must stay that way.
       #
@@ -69,6 +75,11 @@ services:
       - ./certs/ca-bundle.pem:/certs/ca-bundle.pem:ro
     environment:
       HERMES_HOME: /data
+      # The image's s6 stage remaps its `hermes` user to these before dropping
+      # privileges, so everything Hermes writes into the bind mount above is owned by
+      # the operator. Exported by scripts/dev.sh; both must be set.
+      HERMES_UID: ${HERMES_UID:?run through scripts/dev.sh (make dev-up)}
+      HERMES_GID: ${HERMES_GID:?run through scripts/dev.sh (make dev-up)}
       # How our CA reaches Hermes' TLS verification. Hermes passes `ssl_verify`
       # directly to httpx as `verify=`, and httpx 0.28 rejects a path there when a
       # client certificate is also set, so the MCP server block cannot name a CA —
@@ -82,4 +93,3 @@ services:
 
 volumes:
   gateway-data:
-  hermes-data:

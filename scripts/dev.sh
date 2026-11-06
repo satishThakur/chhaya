@@ -32,10 +32,17 @@ mentions() { grep -qE "^${2}=" "$1" 2>/dev/null; }
 # and that one cannot drift. Empty if the adduser line ever changes shape.
 gateway_uid() { sed -n 's/^RUN adduser .*-u \([0-9][0-9]*\).*/\1/p' "$DEPLOY/Dockerfile.gateway" 2>/dev/null | head -1; }
 
-# The uid Hermes runs as. Not the image's `User` (root) — s6 starts the agent with
-# `s6-setuidgid hermes`, uid 10000 from the pinned image's /etc/passwd. Kept in step
-# with deploy/gen-certs.sh, which grants hermes.key to the same number.
-HERMES_UID=10000
+# The uid Hermes runs as: the operator's. The image's s6 stage remaps its `hermes`
+# user to HERMES_UID/HERMES_GID before `s6-setuidgid hermes`, so with these set the
+# agent writes into its bind-mounted home as the operator (verified: a scratch run left
+# every file, .env included, owned by the operator and nothing owned by 10000). The
+# image's default is 10000, which would leave the operator needing sudo to read their
+# own agent's memory. Exported for docker-compose.yml, which refuses to run without them.
+HERMES_UID="$(id -u)"
+HERMES_GID="$(id -g)"
+HERMES_HOME_DIR="${CHHAYA_HERMES_HOME:-$HOME/.chhaya/hermes}"
+export HERMES_UID HERMES_GID
+export CHHAYA_HERMES_HOME="$HERMES_HOME_DIR"
 
 # readable_by FILE UID -> true if that uid can read the file, by any of the three
 # routes that work: an ACL entry, a matching group with the group bit set, or
@@ -43,6 +50,7 @@ HERMES_UID=10000
 # says here is exactly what the container sees.
 readable_by() {
   local f="$1" uid="$2" mode
+  [ "$(stat -c '%u' "$f" 2>/dev/null)" = "$uid" ] && case "$(stat -c '%a' "$f" 2>/dev/null)" in [4-7]??) return 0 ;; esac
   getfacl -p "$f" 2>/dev/null | grep -qE "^user:${uid}:r" && return 0
   mode="$(stat -c '%a' "$f" 2>/dev/null)" || return 1
   case "${mode: -1}" in 4|5|6|7) return 0 ;; esac
@@ -57,6 +65,7 @@ readable_by() {
 # same way, which is a confusing half-hour if you are only looking at the file.
 traversable_by() {
   local d="$1" uid="$2" mode
+  [ "$(stat -c '%u' "$d" 2>/dev/null)" = "$uid" ] && case "$(stat -c '%a' "$d" 2>/dev/null)" in [1357]??) return 0 ;; esac
   getfacl -p "$d" 2>/dev/null | grep -qE "^user:${uid}:..x" && return 0
   mode="$(stat -c '%a' "$d" 2>/dev/null)" || return 1
   case "${mode: -1}" in 1|3|5|7) return 0 ;; esac
@@ -108,6 +117,17 @@ prepare_memory() {
     || die "setting default ACLs on memory/ directories failed — is the filesystem mounted without ACL support?"
   writable_dir_by "$ROOT/memory/taste" "$guid" || die "setfacl on memory/taste did not take — an approved memory tap will fail"
   writable_dir_by "$ROOT/memory/.proposals" "$guid" || die "setfacl on memory/.proposals did not take — propose_update will fail"
+}
+
+# Hermes' home is a host directory, not a Docker volume, so it outlives Docker. Create
+# it 0700 — it holds .env, sessions and state.db — and pre-create the two files
+# docker-compose.yml mounts read-only over it: if they are absent the Docker daemon
+# creates the mountpoints as root, and the operator cannot remove them.
+prepare_hermes_home() {
+  mkdir -p "$HERMES_HOME_DIR"
+  chmod 700 "$HERMES_HOME_DIR"
+  [ -O "$HERMES_HOME_DIR" ] || die "$HERMES_HOME_DIR is not owned by you — Hermes would run as uid $HERMES_UID against someone else's files"
+  touch "$HERMES_HOME_DIR/config.yaml" "$HERMES_HOME_DIR/SOUL.md"
 }
 
 preflight() {
@@ -299,6 +319,7 @@ cmd_certs() {
 
 cmd_up() {
   prepare_memory
+  prepare_hermes_home
   preflight || die "preflight failed — nothing was started"
   render_config
   build_ca_bundle

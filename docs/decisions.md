@@ -510,3 +510,32 @@ user never saw on a card.
 **Reopen if:** anything inside the gateway other than the tap handler writes to `memory/`,
 or any MCP tool gains a path to `ApplyApproved`. Either one turns the grant on `memory/` into
 a write the agent can cause without a human.
+
+---
+
+## 2026-11-06 — Hermes' home is a host bind mount, not a Docker volume
+
+**Hermes' state must outlive Docker.** `/data` held `memories/`, authored `skills/`,
+`state.db` (the source for trace ingestion) and `.env`, in the named volume `hermes-data`.
+`docker compose down -v`, `volume prune` or losing the machine took all of it, and
+`design.md` promised a mounted volume with snapshots. The Hermes Docker docs use a bind mount
+(`~/.hermes:/opt/data`); a named volume appears there only as a workaround for `state.db` on
+virtiofs/9p, which does not apply on Linux ext4.
+
+**Path:** `$CHHAYA_HERMES_HOME`, default `~/.chhaya/hermes`, created `0700` by
+`scripts/dev.sh`. `config.yaml` and `SOUL.md` are pre-created there so the Docker daemon
+does not make root-owned mountpoints for the read-only file mounts.
+
+**`HERMES_UID`/`HERMES_GID` are the operator's.** The image's s6 stage remaps its `hermes`
+user to them. Verified on a scratch directory: every file, `.env` included, came back owned
+by the operator and nothing by 10000. This also removes the old `fix-attrs` hazard of
+chowning host files to 10000. `readable_by` and `traversable_by` now count owner bits, since
+`hermes.key` is owned by the uid Hermes runs as.
+
+**Not done:** `gateway-data` (the audit log, kill-switch state) is still a named volume and
+has the same durability gap. There is no backup job yet; the directory is now an ordinary
+host path for one. Use `sqlite3 state.db ".backup"` for a consistent database copy.
+The old `deploy_hermes-data` volume was copied, not deleted.
+
+**Reopen if:** the Hermes pin moves (recheck that `HERMES_UID` is still honoured), or the
+deployment moves to AWS, where this becomes an EBS mount.
