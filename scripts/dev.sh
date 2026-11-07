@@ -41,8 +41,10 @@ gateway_uid() { sed -n 's/^RUN adduser .*-u \([0-9][0-9]*\).*/\1/p' "$DEPLOY/Doc
 HERMES_UID="$(id -u)"
 HERMES_GID="$(id -g)"
 HERMES_HOME_DIR="${CHHAYA_HERMES_HOME:-$HOME/.chhaya/hermes}"
+GATEWAY_HOME_DIR="${CHHAYA_GATEWAY_HOME:-$HOME/.chhaya/gateway}"
 export HERMES_UID HERMES_GID
 export CHHAYA_HERMES_HOME="$HERMES_HOME_DIR"
+export CHHAYA_GATEWAY_HOME="$GATEWAY_HOME_DIR"
 
 # readable_by FILE UID -> true if that uid can read the file, by any of the three
 # routes that work: an ACL entry, a matching group with the group bit set, or
@@ -128,6 +130,18 @@ prepare_hermes_home() {
   chmod 700 "$HERMES_HOME_DIR"
   [ -O "$HERMES_HOME_DIR" ] || die "$HERMES_HOME_DIR is not owned by you — Hermes would run as uid $HERMES_UID against someone else's files"
   touch "$HERMES_HOME_DIR/config.yaml" "$HERMES_HOME_DIR/SOUL.md"
+  # HERMES_WRITE_SAFE_ROOT (docker-compose.yml): the one directory the agent's file
+  # tools may write. Created here so it is the operator's, not a root-made mountpoint.
+  mkdir -p "$HERMES_HOME_DIR/workspace"
+}
+
+# The gateway's data directory (audit log, kill-switch state) is a host bind mount for
+# the same reason as Hermes' home. memory/ must exist inside it: that is where the
+# Personal-memory bind mount lands, and Docker would make it root-owned if absent.
+prepare_gateway_home() {
+  mkdir -p "$GATEWAY_HOME_DIR/memory"
+  chmod 700 "$GATEWAY_HOME_DIR"
+  [ -O "$GATEWAY_HOME_DIR" ] || die "$GATEWAY_HOME_DIR is not owned by you — the gateway runs as uid $HERMES_UID"
 }
 
 preflight() {
@@ -320,6 +334,7 @@ cmd_certs() {
 cmd_up() {
   prepare_memory
   prepare_hermes_home
+  prepare_gateway_home
   preflight || die "preflight failed — nothing was started"
   render_config
   build_ca_bundle

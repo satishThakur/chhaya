@@ -6,6 +6,9 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.gateway
+    # The operator's uid, so the audit log and state.json in the bind mount below are
+    # the operator's own files: readable and verifiable from the host, no ACLs.
+    user: "${HERMES_UID:?run through scripts/dev.sh (make dev-up)}:${HERMES_GID:?run through scripts/dev.sh (make dev-up)}"
     env_file: .env.gateway        # NEVER .env.hermes — chhayad refuses to start if TELEGRAM_BOT_TOKEN is set in its environment
     environment:
       CHHAYA_DATA_DIR: /data
@@ -16,7 +19,11 @@ services:
       CHHAYA_TLS_KEY: /etc/chhaya/certs/gateway.key
       CHHAYA_TLS_CA: /etc/chhaya/certs/ca.crt
     volumes:
-      - gateway-data:/data
+      # The audit log, kill-switch state and policy marker: a bind mount of a host
+      # directory (default ~/.chhaya/gateway, 0700), so it outlives Docker. The host
+      # is trusted (docs/decisions.md, 2026-11-07). scripts/dev.sh creates it, along
+      # with the empty memory/ mountpoint the bind mount below needs.
+      - ${CHHAYA_GATEWAY_HOME:?run through scripts/dev.sh (make dev-up)}:/data
       # Personal memory is the asset and lives in git, not in a volume. Writable
       # because memory.propose_update stages proposals under .proposals/, and the
       # gateway appends to a document only on a human tap on the approver bot,
@@ -75,6 +82,14 @@ services:
       - ./certs/ca-bundle.pem:/certs/ca-bundle.pem:ro
     environment:
       HERMES_HOME: /data
+      # The only place the agent's file-write tools may write. The image defaults this
+      # to /opt/data, which matches an image whose home is /opt/data; ours is /data, so
+      # the default pointed at a directory Hermes does not use and left file writes
+      # either denied (in the home) or landing in the container's own filesystem
+      # (/opt/data, lost when the container is recreated). Deliberately NOT /data:
+      # that would put skills/, .env, memories/ and cron/ in reach of write_file and
+      # sidestep skills.write_approval. docs/decisions.md, 2026-11-07.
+      HERMES_WRITE_SAFE_ROOT: /data/workspace
       # The image's s6 stage remaps its `hermes` user to these before dropping
       # privileges, so everything Hermes writes into the bind mount above is owned by
       # the operator. Exported by scripts/dev.sh; both must be set.
@@ -91,5 +106,3 @@ services:
       - gateway
     restart: unless-stopped
 
-volumes:
-  gateway-data:

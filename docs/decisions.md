@@ -539,3 +539,64 @@ The old `deploy_hermes-data` volume was copied, not deleted.
 
 **Reopen if:** the Hermes pin moves (recheck that `HERMES_UID` is still honoured), or the
 deployment moves to AWS, where this becomes an EBS mount.
+
+---
+
+## 2026-11-07 — The host is trusted; the gateway's data is a bind mount too
+
+**Assumption, stated so it stops being re-derived:** the machine running the stack is
+secure. We do not defend the audit log or state files against the operator or other host
+users. The boundary that matters is agent versus gateway, and both stay as they were (mTLS,
+separate bot tokens, separate containers). Hardening against the host (append-only
+attributes, separate uids, ACL gymnastics) is out of scope until the deployment is not a
+single-user machine of ours.
+
+**`gateway-data` was a named volume** holding `audit.jsonl`, `state.json` and `policy.hash`,
+with the repo's `memory/` bind-mounted on top at `/data/memory` — a volume and a bind mount
+nested, two ext4 mounts at `/data` and `/data/memory`. `docker volume prune` would have
+deleted the audit log, and the gateway reads a missing log as a legitimate fresh start, so
+the evidence would vanish without an error.
+
+**Now:** `$CHHAYA_GATEWAY_HOME` (default `~/.chhaya/gateway`, 0700) is bind-mounted at
+`/data`, and the gateway container runs as the operator's uid (`user:` in compose). Files are
+the operator's own, `make dev-verify` and direct reads from the host work, and no ACLs are
+needed for this directory. `dev.sh` pre-creates `memory/` inside it for the nested mount.
+The old `deploy_gateway-data` volume was copied (audit chain verified intact: 27 records)
+and not deleted.
+
+**Left as is:** the `setfacl` grants for uid 10001 on `memory/` and `deploy/certs` are now
+redundant, because the gateway no longer runs as 10001. They are harmless and removing them is
+a separate change. The `USER chhaya` in the Dockerfile is overridden by compose.
+
+**Reopen if:** the host stops being trusted (shared machine, cloud instance with other
+tenants), or the audit log needs tamper resistance against the operator.
+
+---
+
+## 2026-11-07 — The agent's file-write root is `/data/workspace`
+
+**The image default does not fit our layout.** The Hermes image sets
+`HERMES_WRITE_SAFE_ROOT=/opt/data`, and the entry on `decisions.md` line 199 ("we do not
+need to set it ourselves") was verified with a home of `/opt/data`. Ours is `/data`
+(`HERMES_HOME`), so the root pointed at a directory Hermes does not use. Found in the logs:
+`Write denied: '/data/digest_feedback/AGENTS.md' is outside HERMES_WRITE_SAFE_ROOT
+(/opt/data)`. The recurring "Daily ML/AI Advancements Digest" job the user asked for had
+`workdir: /opt/data/digest_feedback`, which is allowed but lives in the container's own
+filesystem and is lost when the container is recreated.
+
+**Now:** `HERMES_WRITE_SAFE_ROOT=/data/workspace`, a directory `dev.sh` creates in the
+bind-mounted home. Probed against the pinned image with `agent.file_safety`: writes under
+`workspace/` are allowed; `skills/`, `.env`, `memories/`, `config.yaml`, `SOUL.md`, `cron/`
+and a `workspace/../skills` traversal are denied. The job's `workdir` is now
+`/data/workspace/digest_feedback`, and `SOUL.md` tells the agent where its working files go.
+
+**Not `/data`, on purpose.** That would put `skills/` in reach of `write_file`. A skill can
+declare `required_environment_variables`, and `skills.write_approval` is what closes that
+path — but it gates the skill tools, not a plain file write. Not verified whether a file
+write there would bypass it; the narrow root makes the question moot.
+
+**Not verified:** whether the `terminal` tool honours the safe root. A `terminal` call
+appears in the agent log, and its sandbox has its own rules.
+
+**Reopen if:** the Hermes pin moves (recheck the default and `file_safety`), or a task needs
+to write somewhere outside `workspace/`.
