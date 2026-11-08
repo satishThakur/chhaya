@@ -401,3 +401,85 @@ func (s Store) move(id string, p Proposal, sub, decision string, now time.Time) 
 	}
 	return p, nil
 }
+
+// MaxListed caps how many documents List returns. The cap is a backstop for a
+// runaway directory, not a feature: Personal memory is a handful of files.
+const MaxListed = 500
+
+// DocInfo describes one Personal memory document well enough for the agent to
+// choose which to read: the path memory.get takes, the document's title, and how
+// many entries (bullet lines) it holds.
+type DocInfo struct {
+	Path    string `json:"path"`
+	Title   string `json:"title"`
+	Entries int    `json:"entries"`
+}
+
+// List returns every Markdown document under root, as paths memory.get accepts
+// (relative, no ".md"), sorted. truncated is true if the MaxListed cap cut it off.
+//
+// It reveals only what Resolve would let memory.get read: dot-prefixed files and
+// directories (.git, .proposals — staged proposals are not memory yet) and
+// symlinks are skipped, so a link out of the root is neither followed nor named,
+// and non-Markdown files are ignored. An unreadable root is an error, never an
+// empty list: "no documents" and "could not look" must not look the same.
+func List(root string) (docs []DocInfo, truncated bool, err error) {
+	absRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, false, err
+	}
+	docs = []DocInfo{}
+	walkErr := filepath.WalkDir(absRoot, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if p == absRoot {
+			return nil
+		}
+		name := d.Name()
+		if strings.HasPrefix(name, ".") || d.Type()&fs.ModeSymlink != 0 {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() || !strings.HasSuffix(name, ".md") {
+			return nil
+		}
+		if len(docs) >= MaxListed {
+			truncated = true
+			return filepath.SkipAll
+		}
+		rel, err := filepath.Rel(absRoot, p)
+		if err != nil {
+			return err
+		}
+		docs = append(docs, describe(p, strings.TrimSuffix(filepath.ToSlash(rel), ".md")))
+		return nil
+	})
+	if walkErr != nil {
+		return nil, false, walkErr
+	}
+	sort.Slice(docs, func(i, j int) bool { return docs[i].Path < docs[j].Path })
+	return docs, truncated, nil
+}
+
+// describe reads a document for its title (first "# " heading) and entry count.
+// A read failure leaves the path listed with empty details: the document exists,
+// and memory.get will report the real error if the agent asks for it.
+func describe(file, path string) DocInfo {
+	info := DocInfo{Path: path}
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return info
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		switch {
+		case info.Title == "" && strings.HasPrefix(line, "# "):
+			info.Title = strings.TrimSpace(strings.TrimPrefix(line, "# "))
+		case strings.HasPrefix(line, "- "):
+			info.Entries++
+		}
+	}
+	return info
+}

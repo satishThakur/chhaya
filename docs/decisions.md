@@ -600,3 +600,27 @@ appears in the agent log, and its sandbox has its own rules.
 
 **Reopen if:** the Hermes pin moves (recheck the default and `file_safety`), or a task needs
 to write somewhere outside `workspace/`.
+
+---
+
+## 2026-11-08 — `memory.list` added during the feature freeze
+
+**Why it is an exception.** Sessions in `state.db` showed the agent "forgetting": asked for
+coffee near home, it made no memory call and asked for the address, which was saved in
+`location`; told to check, it guessed `location`, `addresses`, `home`, `profile`. The gateway
+had only `memory.get` (exact path) — `memory.search` was in `design.md` and never built. The
+user asked for the fix before the deployment and eval work, because the live setup is still
+the one gathering the sessions we will learn from.
+
+**What it is.** `memory.list`: tier 0, read, trusted, no arguments. Returns each document's
+path (exactly what `memory.get` takes), title and entry count — never content. Capped at 500
+with a `truncated` flag. It skips dot-prefixed files and directories (`.git`, `.proposals`:
+staged proposals are not memory yet), symlinks, and non-Markdown files; an unreadable root is
+an error, not an empty list. Tests prove each of those stays out of the result.
+
+**Not just a tool.** The agent also did not look before asking, though `SOUL.md` said to call
+`memory_get` first. `SOUL.md` now says to list and read memory before asking the user for a
+fact about themselves. Whether that holds is exactly what the recall eval should measure.
+
+**Reopen if:** memory grows past what a listing can carry (then `memory.search`), or the agent
+still asks before looking after this change.

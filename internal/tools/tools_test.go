@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,6 +84,7 @@ func TestTheRegisteredSetIsExactlyWhatWeExpect(t *testing.T) {
 	}{
 		"ping":                  {policy.TierInternal, policy.Read, mcpsrv.Trusted},
 		"memory.get":            {policy.TierInternal, policy.Read, mcpsrv.Trusted},
+		"memory.list":           {policy.TierInternal, policy.Read, mcpsrv.Trusted},
 		"memory.propose_update": {policy.TierInternal, policy.Write, mcpsrv.Trusted},
 		"capabilities":          {policy.TierInternal, policy.Read, mcpsrv.Trusted},
 	}
@@ -321,5 +323,78 @@ func TestProposeUpdateWithNoNotifierFailsClosed(t *testing.T) {
 	}
 	if f := proposalFiles(t, d.MemoryRoot); len(f) != 0 {
 		t.Fatalf("staged %v with no approver", f)
+	}
+}
+
+func TestMemoryListReturnsDocumentPathsTheAgentCanGet(t *testing.T) {
+	d := deps(t)
+	out, err := find(t, All(d), "memory.list").Handle(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs := out.(map[string]any)["documents"].([]memory.DocInfo)
+	if len(docs) != 1 || docs[0].Path != "taste/food" || docs[0].Title != "Food" {
+		t.Fatalf("got %+v", docs)
+	}
+	// Every listed path must be readable by memory.get as listed — the whole point.
+	if _, err := find(t, All(d), "memory.get").Handle(context.Background(), map[string]any{"path": docs[0].Path}); err != nil {
+		t.Fatalf("a listed path is not gettable: %v", err)
+	}
+}
+
+// The blocked cases: listing must never reveal what memory.get would refuse, nor
+// internal state. Each of these stays out of the result.
+func TestMemoryListNeverRevealsHiddenStateSymlinksOrOtherFiles(t *testing.T) {
+	d := deps(t)
+	root := d.MemoryRoot
+	outside := t.TempDir()
+	os.WriteFile(filepath.Join(outside, "loot.md"), []byte("# Loot\n"), 0o600)
+	os.MkdirAll(filepath.Join(root, ".proposals", "applied"), 0o700)
+	os.WriteFile(filepath.Join(root, ".proposals", "pending.md"), []byte("# P\n"), 0o600)
+	os.MkdirAll(filepath.Join(root, ".git"), 0o700)
+	os.WriteFile(filepath.Join(root, ".git", "x.md"), []byte("# G\n"), 0o600)
+	os.WriteFile(filepath.Join(root, ".hidden.md"), []byte("# H\n"), 0o600)
+	os.WriteFile(filepath.Join(root, "notes.txt"), []byte("not markdown"), 0o600)
+	if err := os.Symlink(filepath.Join(outside, "loot.md"), filepath.Join(root, "link.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := find(t, All(d), "memory.list").Handle(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, doc := range out.(map[string]any)["documents"].([]memory.DocInfo) {
+		if doc.Path != "taste/food" {
+			t.Errorf("memory.list revealed %q", doc.Path)
+		}
+	}
+}
+
+func TestMemoryListIsCappedAndSaysSo(t *testing.T) {
+	d := deps(t)
+	for i := 0; i < memory.MaxListed+5; i++ {
+		os.WriteFile(filepath.Join(d.MemoryRoot, fmt.Sprintf("d%04d.md", i)), []byte("# D\n"), 0o600)
+	}
+	out, err := find(t, All(d), "memory.list").Handle(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := out.(map[string]any)
+	if got := len(m["documents"].([]memory.DocInfo)); got != memory.MaxListed {
+		t.Errorf("listed %d, want the cap %d", got, memory.MaxListed)
+	}
+	if m["truncated"] != true {
+		t.Errorf("truncated = %v, want true so the agent knows the list is partial", m["truncated"])
+	}
+}
+
+func TestMemoryListWithAMissingRootFailsClosed(t *testing.T) {
+	d := deps(t)
+	d.MemoryRoot = filepath.Join(t.TempDir(), "gone")
+	if _, err := find(t, All(d), "memory.list").Handle(context.Background(), nil); err == nil {
+		t.Fatal("listing a missing memory root returned success")
 	}
 }

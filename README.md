@@ -35,7 +35,7 @@ You ◀── Telegram ──▶ approver bot: approval cards, /stop, /resume, /
 ## Personal memory
 
 `memory/` is a folder of Markdown documents, tracked in git: tastes, standards, people, decisions. The agent
-reads them with `memory.get`. It cannot write them.
+reads them with `memory.list` and `memory.get`. It cannot write them.
 
 To remember something, the agent calls `memory.propose_update` with one literal line, for example
 `No okra.`. The approver bot posts a card:

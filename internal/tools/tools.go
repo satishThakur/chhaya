@@ -1,4 +1,4 @@
-// Package tools holds the gateway's tool handlers. In M0b all four are stubs
+// Package tools holds the gateway's tool handlers. In M0b they are stubs
 // or reads: the boundary is exercised before anything valuable sits behind it.
 package tools
 
@@ -62,6 +62,21 @@ func All(d Deps) []mcpsrv.Registration {
 					return nil, fmt.Errorf("no memory document at %q", str(args["path"]))
 				}
 				return string(b), nil
+			},
+		},
+		{
+			Name: "memory.list",
+			Description: "List every Personal memory document: its path (the argument memory.get takes), title and " +
+				"entry count. Call this when you do not know which document holds something, instead of guessing paths. " +
+				"Takes no arguments. Returns paths only, not content; read a document with memory.get.",
+			Tier: policy.TierInternal, Kind: policy.Read, Trust: mcpsrv.Trusted,
+			Schema: json.RawMessage(objectSchema),
+			Handle: func(context.Context, map[string]any) (any, error) {
+				docs, truncated, err := memory.List(d.MemoryRoot)
+				if err != nil {
+					return nil, fmt.Errorf("could not list Personal memory: %w", err)
+				}
+				return map[string]any{"documents": docs, "truncated": truncated}, nil
 			},
 		},
 		{
