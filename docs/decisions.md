@@ -624,3 +624,38 @@ fact about themselves. Whether that holds is exactly what the recall eval should
 
 **Reopen if:** memory grows past what a listing can carry (then `memory.search`), or the agent
 still asks before looking after this change.
+
+---
+
+## 2026-11-08 — Personal memory is data, outside the public repo
+
+**The repo is public.** Personal memory holds a home and office address and a person's
+tastes, and it was tracked in git because `design.md` called it "the asset": versioned,
+revertable, with provenance. That reasoning was about having history, not about having a
+remote. Checked before moving: only the generic seed `taste/food.md` had ever been pushed;
+`interests.md` and `location.md` were never tracked, so there is no history to rewrite. The
+risk was live, though: `food.md` was tracked and modified, so a `git commit -a` would have
+published it.
+
+**Now:** memory lives at `$CHHAYA_GATEWAY_HOME/memory` (default `~/.chhaya/gateway/memory`),
+inside the gateway's one bind mount — the nested `../memory` mount is gone. It is its own
+local git repository with no remote; `dev.sh up` commits what changed
+(`snapshot_memory`), `.proposals/` is ignored. Off-box safety is the backup job's concern.
+`memory/` is in `.gitignore` so a stray copy cannot be committed; `memory.example/` is a
+generic seed (the original seed text from history).
+
+**Removed:** `prepare_memory`, the `setfacl` grants for uid 10001 on `memory/`, and the
+matching `dev-doctor` checks. The gateway runs as the operator (2026-11-07), so none of it
+did anything. This supersedes the `memory/` ACL notes in the 2026-10-30 entry and the
+"Left as is" paragraph in 2026-11-07.
+
+**Verified:** the moved tree was byte-identical to the original (`diff -r`), the audit chain
+still verifies (46 records), and a live mTLS call to the running gateway returned
+`memory.list` and `memory.get location` from the new path. **Not verified:** an approval tap
+writing to the new location; that needs Telegram.
+
+**Costs:** dev and prod no longer share memory (intended); the design's replay-harness
+pin of "git SHA of Personal memory" now means a commit in the local repo.
+
+**Reopen if:** memory needs more than one writer or a second machine, which is when a
+private remote becomes worth its upkeep.

@@ -21,14 +21,10 @@ services:
     volumes:
       # The audit log, kill-switch state and policy marker: a bind mount of a host
       # directory (default ~/.chhaya/gateway, 0700), so it outlives Docker. The host
-      # is trusted (docs/decisions.md, 2026-11-07). scripts/dev.sh creates it, along
-      # with the empty memory/ mountpoint the bind mount below needs.
+      # is trusted (docs/decisions.md, 2026-11-07). scripts/dev.sh creates it. It also
+      # holds Personal memory (memory/), a local git repo: memory is data, not code,
+      # and this repo is public (docs/decisions.md, 2026-11-08).
       - ${CHHAYA_GATEWAY_HOME:?run through scripts/dev.sh (make dev-up)}:/data
-      # Personal memory is the asset and lives in git, not in a volume. Writable
-      # because memory.propose_update stages proposals under .proposals/, and the
-      # gateway appends to a document only on a human tap on the approver bot,
-      # never from a tool call (docs/decisions.md, 2026-10-30).
-      - ../memory:/data/memory
       - ../config/policy.yaml:/etc/chhaya/policy.yaml:ro
       - ./certs:/etc/chhaya/certs:ro
     ports:

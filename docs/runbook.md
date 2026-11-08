@@ -76,10 +76,10 @@ M0b, taken from the design doc, plus one probe the review added.
 | # | Do this | Expect |
 |---|---|---|
 | 1 | "ping the gateway" | A pong with the gateway version. Proves mTLS, MCP and the tool path. |
-| 2 | "what do you know about my food taste?" | The contents of `memory/taste/food.md`. Proves a tier-0 read. |
+| 2 | "what do you know about my food taste?" | The contents of `taste/food.md` from Personal memory. Proves a tier-0 read. |
 | 3 | "what can you do right now?" | The `capabilities` tool: caps remaining, kill switch off, taint clear. |
-| 4 | "remember that I don't eat mushrooms" | A card on the **approver** bot showing the line, with approve and reject buttons. `memory/taste/food.md` is unchanged on disk until the tap. `propose_update` never edits a document. |
-| 4b | Tap approve on that card | The card reads "written", and the line appears at the end of `memory/taste/food.md` followed by `<!-- proposal <id>, approved <date> -->`. |
+| 4 | "remember that I don't eat mushrooms" | A card on the **approver** bot showing the line, with approve and reject buttons. `~/.chhaya/gateway/memory/taste/food.md` is unchanged on disk until the tap. `propose_update` never edits a document. |
+| 4b | Tap approve on that card | The card reads "written", and the line appears at the end of `~/.chhaya/gateway/memory/taste/food.md` followed by `<!-- proposal <id>, approved <date> -->`. |
 | 5 | Send `/stop` to the **approver** bot | "stopped. Writes are refused." |
 | 6 | Retry step 4 | Refused, and the agent can say why — the kill switch is active. |
 | 7 | "fetch https://example.com and tell me what it says" | **This is a probe, not a feature.** If the agent can fetch it, Hermes' web toolset is enabled and the taint model is blind to the likeliest injection vector. See `docs/bugs.md` B6 — if this succeeds, stop and tighten `toolsets` before trusting taint. |
@@ -114,6 +114,14 @@ make dev-down       # stop
 
 ---
 
+## Personal memory
+
+It lives outside the repo, at `~/.chhaya/gateway/memory`, as its own local git repo. See what the agent has
+learned with `git -C ~/.chhaya/gateway/memory log -p`, and undo a line with `git revert`. `make dev-up` commits
+whatever changed since the last start. The repo is public, so nothing in it is ever pushed anywhere.
+
+---
+
 ## The kill switch
 
 Three paths, in descending order of trust:
@@ -142,5 +150,5 @@ Reads keep working while stopped, on purpose — a gateway that cannot answer
 | Every write needs approval unexpectedly | The session is tainted. `/clear` on the approver bot. |
 | Everything is refused with `audit.unwritable` | The audit log became unwritable and the gateway latched. That is deliberate: if it cannot log, it will not act. Fix the disk, then restart. |
 | Every memory card answers "⚠️ not written: the approver cannot write its audit log" | An approver audit append failed and the approver latched: no approve or reject acts until a restart. Fix the disk, then restart; the proposals are still pending and come back as fresh cards. |
-| A memory tap says "⚠️ not written" with a permission error on a document you created | The file was created `0644`, so its ACL mask is `r--` and the gateway cannot append. `make dev-up` re-runs `setfacl`; tap the same card again. |
+| A memory tap says "⚠️ not written" with a permission error | The gateway runs as your uid, so files in `~/.chhaya/gateway/memory` should be yours. Check `find ~/.chhaya/gateway/memory ! -user $(id -u)`; anything left over from the old uid-10001 gateway needs `chown`. Then tap the same card again. |
 | Duplicate memory cards, older ones answering "that card has expired" | Every gateway start re-posts a card for every pending proposal, and cards from an earlier process are dead. A crash loop posts a set per restart. Tap the newest card. |

@@ -59,7 +59,7 @@ flowchart TD
   GW --> Worker["Claude worker: claude -p in worktree"]
   GW --> Swiggy["Swiggy MCP: orders, history"]
   GW --> Garmin["Garmin store: read-only, synced"]
-  GW --> PM["Personal memory: Markdown in git"]
+  GW --> PM["Personal memory: Markdown, local git repo outside the code repo"]
   Worker -->|"branch + PR only"| Repo["Side-project repo"]
   Sync["Garmin sync job"] -->|"daily pull"| Garmin
 ```
@@ -142,7 +142,7 @@ The model of me is the asset, so it lives in Personal memory, our durable long-t
 **Two layers**
 
 - **Hermes built-in** (`MEMORY.md`, `USER.md`): capped at 2,200 and 1,375 characters by design. Use it for the handful of facts every session needs. Turn on `memory.write_approval: true` so nothing lands without my yes.
-- **Personal memory**: a folder of Markdown files in the repo, indexed in SQLite, exposed through the gateway as tools (`memory.search`, `memory.get`, `memory.propose_update`). Unbounded, versioned in git.
+- **Personal memory**: a folder of Markdown files, exposed through the gateway as tools (`memory.list`, `memory.get`, `memory.propose_update`). Unbounded. It is data, not code: it lives on the host outside the code repo (`~/.chhaya/gateway/memory` in dev, an EBS volume in production), as its own local git repository with no remote, so every approved line is diffable and revertable. The code repo is public and must never hold it; `memory.example/` is a generic seed. Off-box safety is the backup job's concern. `memory.list` was built because the agent could not discover documents (see `decisions.md`, 2026-11-08); `memory.search` and an SQLite index are still future work, needed only when a listing stops being enough.
 
 **Memory types in the design.** Personal memory is the durable long-term memory; everything else is a cache, a playbook or raw history.
 
@@ -276,7 +276,7 @@ chhaya/
     tools/               # memory, swiggy, claude_worker, garmin
     config/              # policy.yaml load and validate
   sync/garmin/           # scheduled pull into SQLite
-  memory/                # Personal memory (Markdown, git-tracked)
+  memory.example/        # generic seed for Personal memory; the real one is data, outside the repo
   hermes/                # config.yaml template, SOUL.md, skills we author
   config/policy.yaml     # caps, allowlists, repo list
   evals/                 # scenario tests (see Evals)
@@ -290,7 +290,7 @@ chhaya/
 - Secrets come from env only. Never log them; the audit logger redacts by default.
 - Go 1.24+, standard `go test`, small focused packages. Everything we write is Go; Hermes is the only Python in the
   system and it is an opaque dependency we run as a container. Run `make test` and `make evals` before saying done.
-- Never edit files under `memory/` except through `memory.propose_update` flows.
+- Never edit Personal memory (`$CHHAYA_GATEWAY_HOME/memory`) except through `memory.propose_update` flows. The repo is public: never commit personal data.
 
 **Working loop:** describe one milestone at a time to Claude Code, ask it to plan first, review the plan, then let it build with tests. Keep a short `docs/decisions.md` it appends to whenever we make a choice, so later sessions don't re-litigate.
 
@@ -401,7 +401,7 @@ Four tiers, from cheap and deterministic to judged. The lower tiers are monitors
 | L2 Failure modes | Past mistakes stay fixed | Each trace labeled wrong becomes a case: input + context snapshot + expected property ("no paneer", "at most one question", "PR touches only `api/`") | Assertion where possible, else an LLM judge with a rubric | Before any memory, skill, prompt or model change; nightly |
 | L3 Taste | Is it doing it my way | Scenarios with my own judged answers: "order dinner, it's late and I'm tired", "review this PR like I would" | LLM judge calibrated against my labels | Weekly |
 
-**Replay harness.** L1–L3 run against recorded tool responses, never live tools, so an eval can't order food or push code. Each case pins the context it ran with: the git SHA of Personal memory plus an export of Hermes memory and skills.
+**Replay harness.** L1–L3 run against recorded tool responses, never live tools, so an eval can't order food or push code. Each case pins the context it ran with: the commit of the local Personal-memory repo plus an export of Hermes memory and skills.
 
 **Judge calibration.** An LLM judge only counts once it agrees with my labels. Langfuse's score analytics shows judge-vs-human agreement. With so few labels a week, a Bayesian treatment of judge reliability and pass rates (the BayesJudge approach) gives honest uncertainty instead of noisy point estimates.
 
@@ -448,7 +448,7 @@ Replay a benchmark of my real tasks through four arms:
 
 **3. Avoiding a rigged benchmark.** Past tasks shaped the memory, so scoring today's state on them flatters it. Instead evaluate *prospectively*: snapshot the state at the start of each month and score that snapshot, and arm A, on the tasks that arrive during the month. Over a year this gives a learning curve of 12 snapshots, each judged on tasks it had never seen.
 
-**Prerequisites:** weekly snapshots of learned state (a git tag on Personal memory plus an export of Hermes memory and skills), the replay harness, and a target for C − A set after the first month's baseline rather than guessed now.
+**Prerequisites:** weekly snapshots of learned state (a tag in the local Personal-memory repo plus an export of Hermes memory and skills), the replay harness, and a target for C − A set after the first month's baseline rather than guessed now.
 
 ## Landscape: Muse, Instinct and what they change
 

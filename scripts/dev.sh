@@ -77,50 +77,6 @@ traversable_by() {
   return 1
 }
 
-# writable_dir_by DIR UID -> true if that uid can create files in DIR (w and x).
-writable_dir_by() {
-  local d="$1" uid="$2" mode
-  getfacl -p "$d" 2>/dev/null | grep -qE "^user:${uid}:.wx" && return 0
-  mode="$(stat -c '%a' "$d" 2>/dev/null)" || return 1
-  case "${mode: -1}" in 3|7) return 0 ;; esac
-  if [ "$(stat -c '%g' "$d" 2>/dev/null)" = "$uid" ]; then
-    case "${mode: -2:1}" in 3|7) return 0 ;; esac
-  fi
-  return 1
-}
-
-# The gateway edits a Personal memory document only on a human tap on the approver
-# bot, never from a tool call. memory.propose_update stages a proposal in
-# memory/.proposals/ and posts a card; the tap handler in internal/approval is the
-# one caller of the code that appends to a document (see docs/decisions.md,
-# 2026-10-30). memory/ is a bind mount of the host's directory, owned by the
-# operator, so the gateway (uid 10001) needs an ACL grant on all of it — except
-# memory/.git, which the gateway has no business writing. The default ACLs on
-# directories keep files the gateway creates (0664) writable by the operator. A
-# file the operator creates is writable by the gateway only if it is created
-# group-writable: a 0644 create sets the ACL mask to r--, which cuts the
-# gateway's entry to read until the next `up` re-runs setfacl on it. Until then
-# a tap on that document fails closed with ⚠️ and can be tapped again after
-# `up`. Only operator-owned regular files and directories are touched: setfacl
-# needs the caller to own the file, so a gateway-owned proposal or applied/ dir
-# would fail with EPERM and abort `up`, and the gateway already has owner rights
-# on those, while the parent's default ACL covers the operator. Symlinks are skipped because setfacl follows them, which
-# would grant the gateway whatever they point at outside memory/. .proposals is
-# gitignored and created here because nothing else creates it.
-prepare_memory() {
-  local guid me; guid="$(gateway_uid)"; me="$(id -u)"
-  [ -n "$guid" ] || { ylw "could not read the gateway uid — not granting memory/"; return 0; }
-  mkdir -p "$ROOT/memory/.proposals"
-  find "$ROOT/memory" -path "$ROOT/memory/.git" -prune -o -user "$me" \( -type f -o -type d \) -print0 \
-    | xargs -0r setfacl -m "u:${guid}:rwX" \
-    || die "setfacl on memory/ failed — is the filesystem mounted without ACL support?"
-  find "$ROOT/memory" -path "$ROOT/memory/.git" -prune -o -user "$me" -type d -print0 \
-    | xargs -0r setfacl -d -m "u:${guid}:rwX,u:${me}:rwX" \
-    || die "setting default ACLs on memory/ directories failed — is the filesystem mounted without ACL support?"
-  writable_dir_by "$ROOT/memory/taste" "$guid" || die "setfacl on memory/taste did not take — an approved memory tap will fail"
-  writable_dir_by "$ROOT/memory/.proposals" "$guid" || die "setfacl on memory/.proposals did not take — propose_update will fail"
-}
-
 # Hermes' home is a host directory, not a Docker volume, so it outlives Docker. Create
 # it 0700 — it holds .env, sessions and state.db — and pre-create the two files
 # docker-compose.yml mounts read-only over it: if they are absent the Docker daemon
@@ -135,13 +91,34 @@ prepare_hermes_home() {
   mkdir -p "$HERMES_HOME_DIR/workspace"
 }
 
-# The gateway's data directory (audit log, kill-switch state) is a host bind mount for
-# the same reason as Hermes' home. memory/ must exist inside it: that is where the
-# Personal-memory bind mount lands, and Docker would make it root-owned if absent.
+# The gateway's data directory holds the audit log, the kill-switch state and
+# Personal memory (memory/). All of it is data, not code: it lives on the host under
+# $CHHAYA_GATEWAY_HOME, outside this repo, because the repo is public and memory
+# holds an address and a person's tastes. docs/decisions.md, 2026-11-08.
+#
+# memory/ is its own local git repository, so every approved line stays diffable and
+# revertable. There is deliberately no remote: off-box safety is the backup job's
+# concern, not a push to a service. `snapshot_memory` commits whatever changed since
+# the last `up`; the entries themselves carry per-line provenance as comments.
 prepare_gateway_home() {
   mkdir -p "$GATEWAY_HOME_DIR/memory"
   chmod 700 "$GATEWAY_HOME_DIR"
   [ -O "$GATEWAY_HOME_DIR" ] || die "$GATEWAY_HOME_DIR is not owned by you — the gateway runs as uid $HERMES_UID"
+  local m="$GATEWAY_HOME_DIR/memory"
+  if [ ! -d "$m/.git" ]; then
+    git -C "$m" init -q -b main
+    printf '.proposals/\n' > "$m/.gitignore"
+  fi
+  snapshot_memory
+}
+
+snapshot_memory() {
+  local m="$GATEWAY_HOME_DIR/memory"
+  git -C "$m" add -A
+  git -C "$m" diff --cached --quiet && return 0
+  git -C "$m" -c user.name=chhaya -c user.email=chhaya@localhost \
+    commit -q -m "snapshot: memory as of $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  grn "memory snapshot committed in ${m/#$HOME/~}"
 }
 
 preflight() {
@@ -237,20 +214,6 @@ preflight() {
     fi
   fi
 
-  # --- the gateway can stage proposals and apply approved ones -------------
-  # `make dev-up` creates and grants these; here we only check. A missing
-  # .proposals is fine before the first `up`; present but unwritable means
-  # propose_update fails, and an unwritable memory/taste means a tap on approve
-  # fails. The fix is the same grant prepare_memory makes.
-  local d
-  for d in "$ROOT/memory/taste" "$ROOT/memory/.proposals"; do
-    if [ -n "$guid" ] && [ -d "$d" ] && ! writable_dir_by "$d" "$guid"; then
-      red "${d#"$ROOT"/} is not writable by uid $guid, so memory proposals or approvals will fail."
-      red "  find $ROOT/memory -path $ROOT/memory/.git -prune -o -user $(id -u) \\( -type f -o -type d \\) -print0 | xargs -0r setfacl -m u:${guid}:rwX"
-      fail=1
-    fi
-  done
-
   [ "$fail" -eq 0 ] || return 1
   grn "preflight ok"
 }
@@ -332,7 +295,6 @@ cmd_certs() {
 }
 
 cmd_up() {
-  prepare_memory
   prepare_hermes_home
   prepare_gateway_home
   preflight || die "preflight failed — nothing was started"

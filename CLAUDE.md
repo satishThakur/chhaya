@@ -16,7 +16,8 @@ The gateway is the security boundary, and it is outside the agent on purpose. He
 - **Policy is code plus `config/policy.yaml` — never prompt text.** A limit stated only in a tool description is not enforced. Tool descriptions may *describe* limits so the agent plans well; `internal/policy/` is what holds them.
 - **Changes to `internal/policy/` need tests that prove a blocked case stays blocked.** Write the failing test first. A policy change with only happy-path tests does not land.
 - **Secrets come from env only.** Never log them. The audit logger redacts by default — don't add a path around it.
-- **Never edit files under `memory/` directly.** It changes only through `memory.propose_update` flows, and every entry records its provenance.
+- **Never edit Personal memory directly.** It lives outside this repo, at `$CHHAYA_GATEWAY_HOME/memory` (default `~/.chhaya/gateway/memory`), and changes only through `memory.propose_update` flows; every entry records its provenance.
+- **This repo is public. Never commit personal data**: memory, env files, audit logs, Hermes data. `memory/` is gitignored on purpose; `memory.example/` is the generic seed.
 - **Fail closed.** If the gateway cannot determine a tier, read its own policy state, or reach the approver, it refuses the write.
 
 ## Stack and workflow
@@ -43,7 +44,8 @@ internal/
   tools/            memory, swiggy, claude_worker, garmin
   config/           policy.yaml load and validate
 sync/garmin/        scheduled pull into SQLite
-memory/             Personal memory (Markdown, git-tracked) — propose_update only
+memory.example/     generic seed for Personal memory — not anyone's data
+                    (the real memory is ~/.chhaya/gateway/memory, a local git repo; propose_update only)
 hermes/             config.yaml template, SOUL.md, skills we author
 config/policy.yaml  caps, allowlists, repo list
 evals/              L0 ops, L1 safety, L2 failure modes, L3 taste

@@ -34,8 +34,9 @@ You ◀── Telegram ──▶ approver bot: approval cards, /stop, /resume, /
 
 ## Personal memory
 
-`memory/` is a folder of Markdown documents, tracked in git: tastes, standards, people, decisions. The agent
-reads them with `memory.list` and `memory.get`. It cannot write them.
+Personal memory is a folder of Markdown documents: tastes, standards, people, decisions. It is data, not code, so it
+lives outside this public repo at `~/.chhaya/gateway/memory` (override with `CHHAYA_GATEWAY_HOME`), as its own local git
+repository. `memory.example/` is a generic seed. The agent reads them with `memory.list` and `memory.get`. It cannot write them.
 
 To remember something, the agent calls `memory.propose_update` with one literal line, for example
 `No okra.`. The approver bot posts a card:
@@ -48,7 +49,8 @@ why: User said "I do not like okra"
 ```
 
 Tap approve and the gateway appends `- No okra. <!-- proposal <id>, approved <date> -->` to
-`memory/taste/food.md`. You review the change and commit it. Hermes plays no part between the proposal and
+`taste/food.md` in that folder. `make dev-up` commits what changed to the local repo, so every line stays diffable and
+revertable. Hermes plays no part between the proposal and
 the write. A tap is refused while `/stop` is on, or if the proposal changed after its card was posted.
 
 ## Running it locally
@@ -92,7 +94,7 @@ internal/mcpsrv/    MCP over HTTPS + mTLS; the only path to a tool handler
 internal/memory/    memory proposals: validation, staging, the approved append
 internal/tools/     tool handlers
 config/policy.yaml  caps, allowlists, timeouts
-memory/             Personal memory (Markdown, git-tracked)
+memory.example/     generic seed for Personal memory (the real one lives outside the repo)
 hermes/             Hermes config template and SOUL.md
 deploy/             docker-compose, certificates
 docs/               design, decisions, runbook, specs and plans
