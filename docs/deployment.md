@@ -101,7 +101,7 @@ Built in `infra/terraform/` (`terraform validate` passes; not yet planned or app
 the list above: IMDSv2 only with hop limit 1, so containers on the box cannot reach the instance
 role's credentials; `ignore_changes = [ami, user_data]` on the instance, so a new AMI never replaces
 the instance and its data; bucket named `chhaya-backup-<account>-<region>`, noncurrent versions
-expire after 30 days; Go and the AWS CLI come from snaps (`go --channel=1.25/stable` is unverified).
+expire after 30 days; Go and the AWS CLI come from snaps (`go` 1.25/stable and `aws-cli` v2/stable exist in the snap store, checked 2026-11-09).
 
 Terraform state starts local and is **not** committed (`*.tfstate` gitignored). Moving it to an
 S3 backend is a later change. Never put a secret in a `.tf` file or a variable default.
