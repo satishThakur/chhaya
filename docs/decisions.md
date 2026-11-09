@@ -659,3 +659,27 @@ pin of "git SHA of Personal memory" now means a commit in the local repo.
 
 **Reopen if:** memory needs more than one writer or a second machine, which is when a
 private remote becomes worth its upkeep.
+
+---
+
+## 2026-11-08 — Deployment plan: one EC2 box in Mumbai, Terraform, separate bots per environment
+
+Recorded in full in `docs/deployment.md`. The choices, so they are not re-litigated:
+
+- **Production is one EC2 instance in ap-south-1**, built with Terraform committed under
+  `infra/terraform/`. The desktop becomes development only.
+- **No inbound traffic and no SSH.** The design needs none (Telegram polling, gateway on
+  localhost); the only reason to expose the box was shell access, which SSM Session Manager
+  covers without open ports or key pairs.
+- **Two bot pairs, one per environment.** Two pollers on one token get Telegram 409s, drop
+  messages and can misroute an approval tap. Production keeps the existing `chhaya_bot` and
+  `chhaya_approver_bot`; dev gets new `chhaya_dev_bot` and `chhaya_dev_approver_bot`. A
+  preflight `getMe` check enforces the naming against `CHHAYA_ENV`, so the production token
+  cannot start on the desktop. It fails closed if Telegram is unreachable.
+- **Production takes all current data**, as a copy. The desktop keeps its own, with the
+  digest cron job disabled so only production sends it.
+- **The handover is the first restore**, via a private S3 bucket, so the backup and restore
+  script is written and tested for real before the eval work reuses it.
+
+**Reopen if:** the pinned Hermes image has no arm64 build and cost matters, the box needs a
+second user or inbound access, or the bot naming convention stops being enforceable.

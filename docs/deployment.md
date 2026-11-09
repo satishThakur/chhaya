@@ -1,0 +1,164 @@
+# Deployment
+
+How Chhaya goes from this desktop to a single EC2 box in Mumbai, without losing data and
+without two machines ever talking through the same Telegram bot. Written 2026-11-08 as the
+agreed plan; nothing here is built yet. Where something is unverified, it says so.
+
+Read `docs/decisions.md` first for why the data layout is the way it is. The short version:
+all state is host directories, not Docker volumes, and none of it is in this public repo.
+
+## Decisions (locked)
+
+| Question | Decision |
+|---|---|
+| Where production runs | One EC2 instance, region **ap-south-1 (Mumbai)**. This desktop is development only. |
+| How it is built | **Terraform**, committed to the repo under `infra/terraform/`. |
+| Inbound traffic | **None.** Telegram is outbound polling and the gateway listens on localhost. The security group has zero inbound rules. |
+| Admin access | **SSM Session Manager**, no SSH, no key pairs. Wanted only for debugging, which this covers. *Assumed from the earlier discussion; confirm before building.* |
+| Production bots | The **existing** `chhaya_bot` and `chhaya_approver_bot`. |
+| Dev bots | **New**: `chhaya_dev_bot` and `chhaya_dev_approver_bot`, created in BotFather. |
+| Production data | Takes **all** current data: Hermes home, gateway data (audit log, kill switch), Personal memory. It is a copy, not a move. |
+| Dev data | This desktop keeps its copy. Its digest cron job is disabled so only production sends it. |
+| Secrets | Env files on the box, mode 0600, created by hand over SSM, never in the repo. Secrets Manager comes later. |
+| Host trust | The host is treated as trusted (`decisions.md`, 2026-11-07). |
+
+## The one thing that must not go wrong: one bot token, one poller
+
+Two processes polling the same bot token fight over `getUpdates` (Telegram answers 409), drop
+messages, and can deliver an approval tap to the wrong machine. The fix is two bot pairs, and a
+guard that makes the mistake impossible to make quietly.
+
+| Environment | Hermes bot | Approver bot |
+|---|---|---|
+| prod (EC2) | `chhaya_bot` (existing) | `chhaya_approver_bot` (existing) |
+| dev (desktop) | `chhaya_dev_bot` | `chhaya_dev_approver_bot` |
+
+**The guard** (to be built first, with tests):
+
+1. `deploy/.env.hermes` and `deploy/.env.gateway` each declare `CHHAYA_ENV=dev` or `prod`.
+2. Preflight (`make dev-doctor` and `dev-up`) calls Telegram `getMe` on each token. `getMe` is
+   read-only and does not consume updates.
+3. With `CHHAYA_ENV=dev`, both usernames must contain `_dev_`. With `CHHAYA_ENV=prod`, neither
+   may. The approver's username must contain `approver` and the Hermes bot's must not, which
+   catches swapped tokens.
+4. If `getMe` cannot be reached, it refuses to start. Fail closed.
+
+Result: the production token cannot start on the desktop, and a dev token cannot start on the
+box. The only way round it is to set `CHHAYA_ENV=prod` on the desktop on purpose.
+
+Tests must cover each refusal: wrong environment for each of the two tokens, swapped tokens,
+unreachable Telegram, missing `CHHAYA_ENV`, and an unrecognised value.
+
+## What I checked in the current data (2026-11-08)
+
+- Hermes' own `.env` holds no Telegram or token keys; tokens reach Hermes only through
+  `deploy/.env.hermes`. Copying `~/.chhaya` does not carry a token.
+- All 35 rows in `delivery_obligations` are `delivered`. Nothing stale fires on first start.
+- One scheduled job, "Daily ML/AI Advancements Digest" (`0 3 * * *` UTC), delivers to the
+  user's Telegram chat. If dev kept it enabled, dev's bot would send a second digest. It is
+  disabled in dev's copy only.
+- Not checked: whether Hermes keeps anything else bot-specific in `state.db`
+  (`gateway_routing` stores per-session routing entries). Look at it before the cutover.
+
+## Target shape
+
+```
+EC2 (ap-south-1), no inbound rules, public IP for outbound only
+ ├─ docker compose: gateway + hermes   (same docker-compose.yml as dev)
+ ├─ /home/<user>/.chhaya/{hermes,gateway,backups}   on the instance's encrypted EBS volume
+ ├─ IAM role: AmazonSSMManagedInstanceCore + read/write on the backup bucket
+ └─ certs generated on the box (container-to-container mTLS only)
+
+S3 bucket (private, encrypted, public access blocked): backups and the one-time data handover
+Data Lifecycle Manager: daily EBS snapshots, 14 retained
+```
+
+A public IP is needed only so the instance can reach Telegram, the model API and the web
+without paying for a NAT gateway. The security group has no inbound rules, so nothing can
+reach it.
+
+## Terraform (`infra/terraform/`)
+
+Planned resources, in the default VPC to start:
+
+- `aws_instance`: Ubuntu 24.04, **x86_64**, `t3.medium` to start. Chosen because Hermes' browser
+  tool ran a real Chromium in the logs. **Unverified:** the real memory use, and whether the
+  pinned Hermes image is published for arm64. Start x86_64, measure, resize. `t4g` (Graviton) is
+  cheaper but only if the image supports it.
+- `aws_security_group`: no ingress; egress 443 (and 53) only.
+- `aws_iam_role` + instance profile: `AmazonSSMManagedInstanceCore`, plus a policy scoped to
+  the backup bucket.
+- Root EBS: gp3, encrypted, 30 GB to start.
+- `aws_dlm_lifecycle_policy`: daily snapshots, retain 14.
+- `aws_s3_bucket` for backups: encrypted, versioned, all public access blocked.
+- `user_data`: install Docker, the Compose plugin, git and the AWS CLI; clone this repo over
+  HTTPS (it is public, so no deploy key); do not start the stack. The stack starts only after
+  secrets and data are in place.
+
+Terraform state starts local and is **not** committed (`*.tfstate` gitignored). Moving it to an
+S3 backend is a later change. Never put a secret in a `.tf` file or a variable default.
+
+## Order of work
+
+Each step leaves the live setup untouched until the cutover.
+
+1. **Guard.** `CHHAYA_ENV`, the `getMe` check, tests first, updated `.env.*.example`, a
+   `docs/decisions.md` entry. Touches nothing running.
+2. **Dev bots.** Create the two dev bots in BotFather and press Start on the dev approver bot.
+   Put dev tokens and `CHHAYA_ENV=dev` in the desktop's env files. Disable the digest job in
+   the desktop's `jobs.json`. Back up `~/.chhaya` first. From here the desktop no longer uses the
+   production bots.
+3. **Prove dev** end to end on the dev bots with the runbook smoke test. The production bots are
+   now idle, so nothing is polling them.
+4. **Terraform the box.** `terraform plan` reviewed before `apply`. Confirm SSM works
+   (`aws ssm start-session`) and that the security group really has no inbound rules.
+5. **Data handover.** On the desktop: stop the stack, take a verified backup, write a tarball of
+   `~/.chhaya/{hermes,gateway}` to the backup bucket. On the box: pull it, extract, verify
+   (below). The desktop keeps its copy. This is the first real restore, so the backup/restore
+   script gets written and tested here, and the eval work reuses it.
+6. **Box secrets.** Create `deploy/.env.hermes` and `deploy/.env.gateway` on the box over SSM,
+   mode 0600, with the **production** tokens and `CHHAYA_ENV=prod`. Run `make dev-certs`.
+7. **Cutover.** `make dev-up` on the box. Send a message to `chhaya_bot`; check a memory read, an
+   approval tap and `/stop` on `chhaya_approver_bot`. Only now is production live.
+8. **After.** Delete the handover object from the bucket. Confirm the first EBS snapshot ran.
+
+## Verification before declaring production live
+
+- `state.db` passes `PRAGMA integrity_check` and has at least the 130 messages and 2 sessions
+  recorded on 2026-11-08 (it will have more by then; compare against the desktop's count).
+- `chhayactl audit verify` reports the chain intact from genesis, with at least the same record
+  count as the desktop.
+- `git -C ~/.chhaya/gateway/memory log` matches the desktop's, and `memory.list` returns the
+  same documents.
+- The digest job is present and enabled on the box, and disabled on the desktop.
+- `make dev-doctor` on the box passes, including the bot check, and `make dev-status` shows the
+  gateway refusing an uncertificated client and accepting Hermes'.
+- A test message to `chhaya_bot` gets one reply, not two.
+
+## Rollback
+
+The desktop keeps a full copy and has already moved to the dev bots, so rollback is: stop the
+box (`make dev-down`), set the desktop's env files back to the production tokens and
+`CHHAYA_ENV=prod`, and start it. Conversations made on the box after the cutover would be on the
+box only; take a backup from the box first if there are any worth keeping.
+
+## Risks and open items
+
+- **SSM access** was assumed, not explicitly confirmed. Confirm before step 4.
+- **Instance size and CPU architecture** are unverified (see Terraform above).
+- **Region:** ap-south-1 confirmed. No existing VPC or account details have been given, so the
+  plan uses the default VPC. Say if there is a reason not to.
+- **`gateway_routing` in `state.db`** may hold bot- or machine-specific entries. Inspect before
+  the cutover.
+- **Terraform state** is local at first, so losing the laptop loses the state, not the box.
+- **Cost** has not been estimated. A `t3.medium`, 30 GB gp3, snapshots and a small bucket are
+  all low and none is a reason to change the plan, but nothing here has been priced.
+- **The guard depends on bot naming.** A bot renamed in BotFather outside the convention will
+  be refused until the convention or the check is updated.
+- **Secrets on the box** are plain files. Fine under the trusted-host assumption; Secrets
+  Manager is the planned upgrade.
+
+## Not in scope
+
+New features, the evaluation tooling, an S3 backend for Terraform state, Secrets Manager, and a
+multi-instance or HA setup. Eval and measurement tooling comes after deployment is stable.
