@@ -719,3 +719,13 @@ second user or inbound access, or the bot naming convention stops being enforcea
 **Why.** Terraform ignores `user_data` edits on purpose (`ignore_changes`), because replacing the instance would delete its data. That left the live box and its bootstrap free to drift: `sqlite3` was added to the script but had to be installed by hand. A script in the repo can be re-run on the live box after a `git pull`.
 
 **Consequences.** First boot now runs code from `main` of the public repo, so a bad push to `main` affects a new box. The backup cron is opt-in because a fresh box has no data yet.
+
+## 2026-11-09: Evals are driven by error analysis, not a predefined label list
+
+**Decision.** Observability and evals follow `docs/observability-and-evals.md`: read real traces, note pass or fail and the first failure in free text, group notes into failure modes and count them, then write replayable cases for the modes that persist. Checks are code over the trace wherever the failure is visible in tool calls; an LLM judge is used only for what code cannot see, and only after it agrees with my labels on held-back traces. A change ships when its cases pass more often than a baseline run on the same cases with no regression. Traces are read with `chhayactl trace` (read-only, via the `sqlite3` CLI) on a restored copy of prod; real notes and cases live in `~/.chhaya/evals`, never in this repo.
+
+**Supersedes.** The label schema in `docs/design.md` (nine failure modes chosen in advance, multi-select) and Langfuse as the first UI. The tiers, the learning metrics and the monthly ablation in `docs/design.md` still stand.
+
+**Why.** A taxonomy written before any data names the failures we imagined, not the ones we have; the first real failure (the agent "forgetting", `docs/learnings.md`) was two modes, neither of which the list separated. Generic judged scores were not calibrated against anything. Langfuse is a four-service stack for one user and about 150 traces a month; a CLI over `state.db` answers the same questions now.
+
+**Reopen if:** labeling in the CLI is slow enough that traces go unread, trace volume outgrows reading every one, or the audit-to-session join by time turns out ambiguous.
