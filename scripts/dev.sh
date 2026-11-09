@@ -28,10 +28,6 @@ has_key() { grep -qE "^${2}=.+" "$1" 2>/dev/null; }
 # mentions FILE KEY -> true if KEY appears at all, even empty
 mentions() { grep -qE "^${2}=" "$1" 2>/dev/null; }
 
-# The uid the gateway container runs as, read from the Dockerfile so this file
-# and that one cannot drift. Empty if the adduser line ever changes shape.
-gateway_uid() { sed -n 's/^RUN adduser .*-u \([0-9][0-9]*\).*/\1/p' "$DEPLOY/Dockerfile.gateway" 2>/dev/null | head -1; }
-
 # The uid Hermes runs as: the operator's. The image's s6 stage remaps its `hermes`
 # user to HERMES_UID/HERMES_GID before `s6-setuidgid hermes`, so with these set the
 # agent writes into its bind-mounted home as the operator (verified: a scratch run left
@@ -183,51 +179,27 @@ preflight() {
     fail=1
   fi
 
-  # --- the gateway can actually read its own key ---------------------------
-  # gen-certs.sh grants this at generation time, but it refuses to re-run over
-  # existing certs — so every install made before that grant existed lands here.
-  # Without this check the symptom is `restart: unless-stopped` crash-looping on
-  # "load server keypair: permission denied", which reads like a TLS problem and
-  # is not one.
-  local guid; guid="$(gateway_uid)"
-  if [ -z "$guid" ]; then
-    ylw "could not read the gateway uid from deploy/Dockerfile.gateway — skipping the key-readability check"
-  elif [ -f "$DEPLOY/certs/gateway.key" ]; then
-    if ! traversable_by "$DEPLOY/certs" "$guid"; then
-      red "deploy/certs is not traversable by uid $guid, which is what the gateway runs as."
-      red "Fix it with:"
-      red "  setfacl -m u:${guid}:x $DEPLOY/certs"
-      fail=1
-    fi
-    if ! readable_by "$DEPLOY/certs/gateway.key" "$guid"; then
-      red "deploy/certs/gateway.key is not readable by uid $guid, which is what the gateway runs as."
-      red "Bind mounts do not remap ownership, so the container sees this file exactly as the host does."
-      red "Fix it with:"
-      red "  setfacl -m u:${guid}:r $DEPLOY/certs/gateway.key"
-      fail=1
-    fi
-  fi
-
-  # --- Hermes can read its own client key ----------------------------------
-  # Same bug, different uid, and a far worse symptom. s6 runs the agent as uid
-  # 10000 (`s6-setuidgid hermes`), not as the image's root User. A client key it
-  # cannot read does not say "permission denied" anywhere obvious — the MCP
-  # handshake just never completes, Hermes blows its 60 s startup deadline, s6
-  # SIGTERMs it, and the container crash-loops looking like a network fault.
-  if [ -f "$DEPLOY/certs/hermes.key" ]; then
+  # --- both containers can read their own key -----------------------------
+  # Both run as the operator's uid (gateway: `user:` in docker-compose.yml; Hermes:
+  # HERMES_UID, remapped by the image's s6 stage), and bind mounts do not remap
+  # ownership, so each key must be readable by that uid on the host. A key it cannot
+  # read does not say so: the gateway crash-loops on "load server keypair: permission
+  # denied", and Hermes just fails its MCP handshake, misses its startup deadline and
+  # crash-loops looking like a network fault.
+  local k
+  for k in gateway.key hermes.key; do
+    [ -f "$DEPLOY/certs/$k" ] || continue
     if ! traversable_by "$DEPLOY/certs" "$HERMES_UID"; then
-      red "deploy/certs is not traversable by uid $HERMES_UID, which is what Hermes runs as."
-      red "  setfacl -m u:${HERMES_UID}:x $DEPLOY/certs"
+      red "deploy/certs is not traversable by uid $HERMES_UID, which both containers run as."
+      red "  chmod u+x $DEPLOY/certs"
       fail=1
     fi
-    if ! readable_by "$DEPLOY/certs/hermes.key" "$HERMES_UID"; then
-      red "deploy/certs/hermes.key is not readable by uid $HERMES_UID, which is what Hermes runs as."
-      red "Hermes will not report this: it fails its MCP handshake, misses its startup"
-      red "deadline and crash-loops. Fix it with:"
-      red "  setfacl -m u:${HERMES_UID}:r $DEPLOY/certs/hermes.key"
+    if ! readable_by "$DEPLOY/certs/$k" "$HERMES_UID"; then
+      red "deploy/certs/$k is not readable by uid $HERMES_UID, which both containers run as."
+      red "  chown $HERMES_UID $DEPLOY/certs/$k && chmod 600 $DEPLOY/certs/$k"
       fail=1
     fi
-  fi
+  done
 
   [ "$fail" -eq 0 ] || return 1
   grn "preflight ok"
