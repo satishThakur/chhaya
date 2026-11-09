@@ -83,9 +83,11 @@ Planned resources, in the default VPC to start:
 
 - `aws_instance`: Ubuntu 24.04, **x86_64**, `t3.medium` to start. Chosen because Hermes' browser
   tool ran a real Chromium in the logs. **Unverified:** the real memory use, and whether the
-  pinned Hermes image is published for arm64. Start x86_64, measure, resize. `t4g` (Graviton) is
-  cheaper but only if the image supports it.
-- `aws_security_group`: no ingress; egress 443 (and 53) only.
+  pinned Hermes image is published for arm64. The pinned digest is a single-platform amd64 manifest
+  (checked 2026-11-09), so the box must be x86_64; `t4g` (Graviton) is out until the pin changes.
+  On the desktop Hermes used ~300 MiB idle. Start `t3.medium`, measure under real use, resize.
+- `aws_security_group`: no ingress; egress 443, 53 and 80. Port 80 was added to the plan: Ubuntu's
+  apt mirrors are plain http (packages are signature-checked).
 - `aws_iam_role` + instance profile: `AmazonSSMManagedInstanceCore`, plus a policy scoped to
   the backup bucket.
 - Root EBS: gp3, encrypted, 30 GB to start.
@@ -94,6 +96,12 @@ Planned resources, in the default VPC to start:
 - `user_data`: install Docker, the Compose plugin, git, Go (the bot check runs `chhayactl botcheck` on the host) and the AWS CLI; clone this repo over
   HTTPS (it is public, so no deploy key); do not start the stack. The stack starts only after
   secrets and data are in place.
+
+Built in `infra/terraform/` and applied 2026-11-09 (account 803874683069): instance `i-0741a78bba409c0a9`, bucket `chhaya-backup-803874683069-ap-south-1`. The default VPC is deliberate: the box has no inbound rules and an otherwise empty VPC, and a private subnet would add a NAT gateway for no gain. Move to a custom VPC if the box ever serves inbound traffic or other machines join the VPC. Choices beyond
+the list above: IMDSv2 only with hop limit 1, so containers on the box cannot reach the instance
+role's credentials; `ignore_changes = [ami, user_data]` on the instance, so a new AMI never replaces
+the instance and its data; bucket named `chhaya-backup-<account>-<region>`, noncurrent versions
+expire after 30 days; Go and the AWS CLI come from snaps (`go` 1.25/stable and `aws-cli` v2/stable exist in the snap store, checked 2026-11-09).
 
 Terraform state starts local and is **not** committed (`*.tfstate` gitignored). Moving it to an
 S3 backend is a later change. Never put a secret in a `.tf` file or a variable default.
@@ -121,6 +129,18 @@ Each step leaves the live setup untouched until the cutover.
 7. **Cutover.** `make dev-up` on the box. Send a message to `chhaya_bot`; check a memory read, an
    approval tap and `/stop` on `chhaya_approver_bot`. Only now is production live.
 8. **After.** Delete the handover object from the bucket. Confirm the first EBS snapshot ran.
+
+## Handover done (2026-11-09)
+
+`scripts/chhaya-backup.sh` (create / push / pull / restore) took a verified tarball of
+`~/.chhaya/{hermes,gateway}` with the stack down, tested a restore into a scratch directory
+(including refusing to overwrite and catching a tampered file), uploaded it to
+`s3://chhaya-backup-803874683069-ap-south-1/handover/`, and restored it on the box. Counts
+matched the manifest: state.db ok, 400 messages, 13 sessions, 13 gateway_routing rows, 57 audit
+records with the chain intact from genesis on the box, same memory git head. Lock files and
+sockets are excluded on purpose (a pid from another machine means nothing). `gateway_routing`
+entries are per-session DMs, with no bot token in them. The handover object stays in the bucket
+until the cutover succeeds (step 8).
 
 ## Verification before declaring production live
 

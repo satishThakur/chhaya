@@ -41,3 +41,10 @@ coverage.*
 *.swp
 .idea/
 .vscode/
+
+# --- terraform ---
+infra/terraform/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+crash.log
