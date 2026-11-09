@@ -49,7 +49,9 @@ memory.example/     generic seed for Personal memory — not anyone's data
 hermes/             config.yaml template, SOUL.md, skills we author
 config/policy.yaml  caps, allowlists, repo list
 evals/              L0 ops, L1 safety, L2 failure modes, L3 taste
-deploy/             docker-compose.yml now, AWS later
+deploy/             docker-compose.yml (same file on desktop and EC2)
+infra/terraform/    the EC2 box, bucket and snapshots (Mumbai)
+scripts/            dev.sh, chhaya-backup.sh, install-aws-tools.sh
 docs/               design.md, decisions.md, diagrams/
 ```
 

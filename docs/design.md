@@ -280,7 +280,8 @@ chhaya/
   hermes/                # config.yaml template, SOUL.md, skills we author
   config/policy.yaml     # caps, allowlists, repo list
   evals/                 # scenario tests (see Evals)
-  deploy/                # docker-compose.yml now, AWS later
+  deploy/                # docker-compose.yml, same file on the desktop and the EC2 box
+  infra/terraform/       # the EC2 box (see docs/deployment.md)
 ```
 
 **`CLAUDE.md` should tell Claude Code:**

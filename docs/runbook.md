@@ -35,6 +35,12 @@ CHHAYA_HERMES_API_BASE=https://api.anthropic.com/v1
 PROXY_API_KEY=<the key for that endpoint>
 ```
 
+**Which environment is this?** Both env files carry `CHHAYA_ENV=dev` or `prod` (exact, no
+default, and the two must agree). Preflight asks Telegram who each token is and refuses
+unless the bots match: dev bots are `chhaya_dev_bot` / `chhaya_dev_approver_bot`, prod are
+`chhaya_bot` / `chhaya_approver_bot`. The desktop is `dev`, the EC2 box is `prod`. Never
+point two machines at one bot. See `docs/deployment.md`.
+
 **2. Generate certificates** — once, then never again unless you mean to rotate:
 
 ```bash
@@ -57,6 +63,11 @@ with you — until you message it first, `sendMessage` fails with `chat not foun
 even though the token is valid. The gateway probes the approver chat at startup
 and refuses to start if it cannot reach it, so skipping this looks like a
 configuration error.
+
+**The box.** Production runs on one EC2 instance in Mumbai with no inbound ports. Open a
+shell with `aws ssm start-session --region ap-south-1 --target <instance id from terraform output>`,
+then `sudo -iu ubuntu` and `cd ~/chhaya`; the same `make dev-*` verbs work there. Backups:
+`scripts/chhaya-backup.sh create` (stack down), `push`, `pull`, `restore`.
 
 **5. Start:**
 
