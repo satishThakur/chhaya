@@ -130,6 +130,18 @@ Each step leaves the live setup untouched until the cutover.
    approval tap and `/stop` on `chhaya_approver_bot`. Only now is production live.
 8. **After.** Delete the handover object from the bucket. Confirm the first EBS snapshot ran.
 
+## Handover done (2026-11-09)
+
+`scripts/chhaya-backup.sh` (create / push / pull / restore) took a verified tarball of
+`~/.chhaya/{hermes,gateway}` with the stack down, tested a restore into a scratch directory
+(including refusing to overwrite and catching a tampered file), uploaded it to
+`s3://chhaya-backup-803874683069-ap-south-1/handover/`, and restored it on the box. Counts
+matched the manifest: state.db ok, 400 messages, 13 sessions, 13 gateway_routing rows, 57 audit
+records with the chain intact from genesis on the box, same memory git head. Lock files and
+sockets are excluded on purpose (a pid from another machine means nothing). `gateway_routing`
+entries are per-session DMs, with no bot token in them. The handover object stays in the bucket
+until the cutover succeeds (step 8).
+
 ## Verification before declaring production live
 
 - `state.db` passes `PRAGMA integrity_check` and has at least the 130 messages and 2 sessions
