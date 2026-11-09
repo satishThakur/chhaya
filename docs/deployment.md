@@ -97,7 +97,7 @@ Planned resources, in the default VPC to start:
   HTTPS (it is public, so no deploy key); do not start the stack. The stack starts only after
   secrets and data are in place.
 
-Built in `infra/terraform/` (`terraform validate` passes; not yet planned or applied). Choices beyond
+Built in `infra/terraform/` and applied 2026-11-09 (account 803874683069): instance `i-0741a78bba409c0a9`, bucket `chhaya-backup-803874683069-ap-south-1`. The default VPC is deliberate: the box has no inbound rules and an otherwise empty VPC, and a private subnet would add a NAT gateway for no gain. Move to a custom VPC if the box ever serves inbound traffic or other machines join the VPC. Choices beyond
 the list above: IMDSv2 only with hop limit 1, so containers on the box cannot reach the instance
 role's credentials; `ignore_changes = [ami, user_data]` on the instance, so a new AMI never replaces
 the instance and its data; bucket named `chhaya-backup-<account>-<region>`, noncurrent versions
