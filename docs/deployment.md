@@ -208,9 +208,10 @@ The box needs the `sqlite3` CLI; without it the check fails closed.
   in the desktop's `~/.chhaya/hermes/cron/jobs.json` when that stops being wanted.
 - **Admin access keys** for `chhaya-admin` are in `~/.aws/credentials`. Rotate or delete them
   when no longer building.
-- **Nightly backup to S3** is built (`chhayactl backup`, `scripts/dev.sh backup`,
-  `deploy/crontab.box`) but not installed on the box until the first live run is approved.
-  See the section below.
+- **Nightly backup to S3** is live since 2026-11-09: crontab installed on the box (02:00 IST),
+  30-day S3 expiry applied, first run uploaded and restored into a scratch directory. The first
+  scheduled run is 2026-11-09 20:30 UTC; check `make dev-status` on the box or
+  `tail ~/.chhaya/backups/backup.log` after it.
 - The desktop's old Docker volumes `deploy_hermes-data` and `deploy_gateway-data` still exist.
 
 ## Not in scope
