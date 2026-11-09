@@ -174,6 +174,42 @@ It also plausibly costs most of the startup budget in B8.
 
 ---
 
+## B10 — Telegram threaded mode silenced the bot, and polling stalls need a restart
+
+**Severity:** degrades · **Found:** 2026-11-09, on the box · **Area:** Hermes Telegram adapter, `hermes/config.yaml`
+
+**What happened.** On 2026-11-09 the bot stopped answering for several hours. Hermes logged
+no inbound message after 11:33 UTC; Telegram held nothing queued (`pending_update_count: 0`)
+and no webhook. The owner had turned on threaded mode for the bot in Telegram's settings.
+Turning it off fixed it at once. Hermes' database has a `telegram_dm_topic_mode` row with its
+flags set, so Hermes had registered a topic mode for the chat. Not traced: whether Hermes
+dropped thread messages or answered into a thread the owner could not see.
+
+**Separately, a stall.** At 17:04 UTC Hermes logged `Sticky Telegram path … failed;
+re-walking IPv4 literals` and then nothing, until the container was restarted at 17:59. It
+had recovered from the same warning several times on 2026-11-07 and 11-08. Whether that
+17:04 stall was real or the threads problem again is unproven: both overlap in time. Also
+unexplained: the approver bot logged `getUpdates: Bad Gateway` from 12:54 UTC and never
+logged a recovery before the 16:53 restart.
+
+**Cost.** A silent agent that looks fine to every check: containers up, polling "healthy".
+The restart also discards queued messages (`drop_pending_on_cold_boot: true`).
+
+**Questions to answer.**
+1. Do we want threads at all? One chat is one task boundary today (`/new`); topics would
+   split sessions differently and change what a trace is (`docs/observability-and-evals.md`).
+2. Is dropping or misrouting thread messages a Hermes bug? Read the adapter and the
+   `telegram_dm_topic_*` tables on the pinned digest; check upstream issues.
+3. Should Hermes reconnect without a restart? Look for a polling-timeout or reconnect setting
+   (`platforms.telegram.extra`, attempt limits) and whether the approver's loop needs one.
+4. Do we want a watchdog that alerts or restarts when `gateway.log` shows no
+   `getUpdates progressing` for N minutes? (A feature, so it needs the owner's go-ahead.)
+
+**Until then.** Leave threaded mode off. If the bot goes quiet: send `/start` and compare the
+bot's username with the one the box runs (`getMe`) before restarting anything.
+
+---
+
 ## Closed
 
 ### B10 — Four bugs that stopped Hermes starting, reaching the gateway, or verifying it
