@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,7 +15,9 @@ import (
 	"sort"
 	"time"
 
+	"github.com/satishthakur/chhaya/internal/approval"
 	"github.com/satishthakur/chhaya/internal/audit"
+	"github.com/satishthakur/chhaya/internal/botguard"
 	"github.com/satishthakur/chhaya/internal/config"
 	"github.com/satishthakur/chhaya/internal/state"
 )
@@ -42,6 +45,14 @@ func main() {
 		err = runStop(filepath.Join(*dataDir, "state.json"), true, os.Stdout)
 	case "resume":
 		err = runStop(filepath.Join(*dataDir, "state.json"), false, os.Stdout)
+	case "botcheck":
+		fs := flag.NewFlagSet("botcheck", flag.ExitOnError)
+		hermesEnv := fs.String("hermes-env", "deploy/.env.hermes", "Hermes env file")
+		gatewayEnv := fs.String("gateway-env", "deploy/.env.gateway", "gateway env file")
+		fs.Parse(args[1:])
+		err = runBotCheck(*hermesEnv, *gatewayEnv, func(token string) botGetter {
+			return approval.NewHTTPTelegram(token, nil)
+		}, os.Stdout)
 	case "policy":
 		if len(args) < 2 || args[1] != "explain" {
 			usage()
@@ -65,8 +76,34 @@ func usage() {
   audit verify     walk the hash chain from genesis and report
   stop             set the kill switch without the daemon
   resume           clear the kill switch
+  botcheck         confirm both bot tokens belong to this CHHAYA_ENV (calls Telegram getMe)
   policy explain   print the values the gateway is enforcing
 `)
+}
+
+// botGetter is the one Telegram call botcheck makes.
+type botGetter = botguard.Telegram
+
+// runBotCheck refuses unless both tokens are the bots CHHAYA_ENV says they should be.
+// Tokens are read here and handed only to the Telegram client; nothing prints them.
+func runBotCheck(hermesEnvPath, gatewayEnvPath string, mk func(token string) botGetter, out io.Writer) error {
+	h, err := botguard.ReadEnvFile(hermesEnvPath)
+	if err != nil {
+		return fmt.Errorf("cannot read Hermes env file: %w", err)
+	}
+	g, err := botguard.ReadEnvFile(gatewayEnvPath)
+	if err != nil {
+		return fmt.Errorf("cannot read gateway env file: %w", err)
+	}
+	ht, at := h["TELEGRAM_BOT_TOKEN"], g["CHHAYA_APPROVER_BOT_TOKEN"]
+	if ht == "" || at == "" {
+		return errors.New("both TELEGRAM_BOT_TOKEN (Hermes) and CHHAYA_APPROVER_BOT_TOKEN (gateway) must be set")
+	}
+	if err := botguard.Verify(context.Background(), h["CHHAYA_ENV"], g["CHHAYA_ENV"], mk(ht), mk(at)); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "ok: both bots belong to CHHAYA_ENV=%s\n", h["CHHAYA_ENV"])
+	return nil
 }
 
 func runVerify(path string, out io.Writer) error {
