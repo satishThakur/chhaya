@@ -691,3 +691,11 @@ second user or inbound access, or the bot naming convention stops being enforcea
 **Why.** One bot token, one poller: two machines on the same bot drop messages (409) and can misroute an approval tap. Dev and prod have separate bot pairs (`docs/deployment.md`), and the only safe way to keep it that way is to check, not to remember.
 
 **Consequences.** The check needs Go on the host (the box's `user_data` must install it, or the check moves into a container). It checks at start only; it cannot stop someone editing a token after `up`. The gateway does not re-check its own token at runtime yet. Existing env files must gain `CHHAYA_ENV` (the current desktop setup uses the prod bots, so `prod` until step 2 of the deployment plan).
+
+## 2026-11-09: Production is live on EC2; certificate ACLs removed
+
+**Decision.** Production runs on the Mumbai box (`docs/deployment.md`), started 2026-11-09 and smoke-tested over Telegram. The desktop is dev, on the dev bots. `deploy/gen-certs.sh` no longer calls `setfacl` and `scripts/dev.sh` preflight checks key readability against the operator's uid instead of 10001 and 10000.
+
+**Why.** Both containers run as the operator's uid since the bind-mount move, so a `0600` key the operator owns is already readable by the process that needs it. The ACL grants were left over from the old uids and made `make dev-certs` fail on the fresh box (`setfacl: command not found`).
+
+**Consequences.** `scripts/chhaya-backup.sh` is the one way data moves between machines (checksum, manifest of counts, no overwrite on restore). Open follow-ups are listed at the end of `docs/deployment.md`.

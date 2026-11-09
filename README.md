@@ -55,7 +55,9 @@ the write. A tap is refused while `/stop` is on, or if the proposal changed afte
 
 ## Running it locally
 
-Needs Docker, Go 1.24+, and two Telegram bots: one for Hermes, one for the approver.
+Needs Docker, Go 1.25+, and two Telegram bots: one for Hermes, one for the approver. Each environment
+has its own pair (`CHHAYA_ENV=dev|prod` in both env files; preflight checks it), because two machines
+polling one bot drop messages. Production runs on a single EC2 box: see [`docs/deployment.md`](docs/deployment.md).
 
 ```bash
 cp deploy/.env.hermes.example  deploy/.env.hermes    # Hermes' bot token, model settings

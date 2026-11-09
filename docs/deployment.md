@@ -2,7 +2,9 @@
 
 How Chhaya goes from this desktop to a single EC2 box in Mumbai, without losing data and
 without two machines ever talking through the same Telegram bot. Written 2026-11-08 as the
-agreed plan; nothing here is built yet. Where something is unverified, it says so.
+agreed plan. **Status 2026-11-09: production is live on the box** (steps 1 to 7 done and tested
+over Telegram: one reply, memory read, approval tap, `/stop`). Step 8 and the follow-ups are at
+the end. Where something is unverified, it says so.
 
 Read `docs/decisions.md` first for why the data layout is the way it is. The short version:
 all state is host directories, not Docker volumes, and none of it is in this public repo.
@@ -177,6 +179,22 @@ box only; take a backup from the box first if there are any worth keeping.
   be refused until the convention or the check is updated.
 - **Secrets on the box** are plain files. Fine under the trusted-host assumption; Secrets
   Manager is the planned upgrade.
+
+## After the cutover (open items)
+
+- **Step 8:** the handover tarball is still in the bucket under `handover/`. Delete it once
+  you are sure the box needs no rebuild from it.
+- **First EBS snapshot** has not been confirmed. DLM runs daily at 21:00 UTC; check
+  `aws ec2 describe-snapshots --owner-ids self` after that.
+- **Terraform state** is `infra/terraform/terraform.tfstate`, local and gitignored. Keep a copy
+  off this disk.
+- **Digest job** is enabled on both the desktop copy and the box, so both send it. Disable it
+  in the desktop's `~/.chhaya/hermes/cron/jobs.json` when that stops being wanted.
+- **Admin access keys** for `chhaya-admin` are in `~/.aws/credentials`. Rotate or delete them
+  when no longer building.
+- **Daily backup to S3** is not scheduled yet; only EBS snapshots run. `scripts/chhaya-backup.sh`
+  does the work and needs a cron or timer.
+- The desktop's old Docker volumes `deploy_hermes-data` and `deploy_gateway-data` still exist.
 
 ## Not in scope
 
