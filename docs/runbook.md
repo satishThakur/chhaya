@@ -66,7 +66,8 @@ configuration error.
 
 **The box.** Production runs on one EC2 instance in Mumbai with no inbound ports. Open a
 shell with `aws ssm start-session --region ap-south-1 --target <instance id from terraform output>`,
-then `sudo -iu ubuntu` and `cd ~/chhaya`; the same `make dev-*` verbs work there. Backups:
+then `sudo -iu ubuntu` and `cd ~/chhaya`; the same `make dev-*` verbs work there. After a `git pull`
+on the box, `scripts/box-setup.sh --check --cron` lists anything the box is missing and `sudo scripts/box-setup.sh` fixes it. Backups:
 `chhayactl backup create|verify|restore|push|pull|status` (stack down for create and restore);
 `make dev-backup` does stop, backup, restart, upload in one go. Nightly at 02:00 IST via `deploy/crontab.box`.
 
