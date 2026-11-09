@@ -7,7 +7,7 @@ exec > >(tee -a /var/log/chhaya-bootstrap.log) 2>&1
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y docker.io docker-compose-v2 git make curl
+apt-get install -y docker.io docker-compose-v2 git make curl sqlite3
 
 # Go (the bot check runs `chhayactl botcheck` on the host; go.mod wants 1.25+) and
 # the AWS CLI are snaps: Ubuntu 24.04's apt has neither at a usable version.

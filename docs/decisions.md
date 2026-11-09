@@ -698,4 +698,16 @@ second user or inbound access, or the bot naming convention stops being enforcea
 
 **Why.** Both containers run as the operator's uid since the bind-mount move, so a `0600` key the operator owns is already readable by the process that needs it. The ACL grants were left over from the old uids and made `make dev-certs` fail on the fresh box (`setfacl: command not found`).
 
-**Consequences.** `scripts/chhaya-backup.sh` is the one way data moves between machines (checksum, manifest of counts, no overwrite on restore). Open follow-ups are listed at the end of `docs/deployment.md`.
+**Consequences.** `chhayactl backup` is the one way data moves between machines (see the next entry). Open follow-ups are listed at the end of `docs/deployment.md`.
+
+## 2026-11-09: Backup is Go, in `chhayactl`, run from the host with the stack stopped
+
+**Decision.** `chhayactl backup create|verify|restore|push|pull|status`, implemented in `internal/backup`. A nightly job (cron on the box, 02:00 IST) runs `scripts/dev.sh backup`: stop both containers for a few seconds, take a cold copy, restart, upload to `s3://<bucket>/backups/`. S3 keeps 30 days (lifecycle rule); the box keeps three locally. Replaces the shell script.
+
+**Why not inside `chhayad`.** The daemon only sees the gateway's data, not Hermes' home; backing up both would mean mounting agent-writable files into the security boundary. It would also pull an AWS SDK and a SQLite driver into the most trusted process and give it write credentials, and restore must work when nothing is running. A backup is not an agent action, so the kill switch and policy tiers should not govern it.
+
+**Why stop the stack.** A cold copy is exactly consistent, so the code needs no SQLite library: databases are copied as files and checked with the `sqlite3` CLI (`PRAGMA integrity_check`; fails closed if the CLI is missing). Nobody talks to the agent at 02:00. A real maintenance mode (see `docs/backlog.md`) replaces the stop later.
+
+**Format and checks.** One tarball with `MANIFEST.json` as its last entry (every file's size, mode, SHA-256) plus a `.sha256` sidecar. Restore needs both: the sidecar catches damage in transit, the manifest catches an archive rebuilt with a fixed-up sidecar. Restore never overwrites, extracts to a temp directory, then moves into place; refuses symlinks, special files, absolute or `..` paths and anything outside `hermes/` and `gateway/`. Lock files and sockets are excluded. Create refuses a failing database or a broken audit chain. Each safety check has a test that fails when the check is removed (mutation-checked).
+
+**Consequences.** Upload and download shell out to the `aws` CLI so the instance role is used and no AWS SDK enters our code. The box stops for a few seconds nightly; a missed run shows as a stale-backup warning in `make dev-status` on prod. Remote triggering (EventBridge to SSM Run Command) is the next step and changes nothing in the tool.

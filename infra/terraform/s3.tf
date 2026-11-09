@@ -49,4 +49,17 @@ resource "aws_s3_bucket_lifecycle_configuration" "backup" {
       days_after_initiation = 7
     }
   }
+
+  # Nightly backups (chhayactl backup push) are kept 30 days. Versioning then keeps the
+  # expired object as a noncurrent version for the rule above before it is gone for good.
+  rule {
+    id     = "expire-nightly-backups"
+    status = "Enabled"
+    filter {
+      prefix = "backups/"
+    }
+    expiration {
+      days = 30
+    }
+  }
 }

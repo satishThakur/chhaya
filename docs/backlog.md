@@ -15,6 +15,6 @@ during it, and whether Hermes' own cron jobs pause.
 
 ## Backup as part of the product (asked 2026-11-09)
 
-Backup and restore as Go code in this repo rather than a shell script, triggerable remotely
-(a Lambda or EventBridge rule, not only cron on the box). See the design discussion recorded
-in `docs/decisions.md` when it is settled.
+Backup and restore are Go now (`chhayactl backup`, decided 2026-11-09). Still open: triggering it
+remotely (an EventBridge rule calling SSM Run Command, so the box needs no cron) and making
+it a quiesce request to maintenance mode instead of stopping the containers.

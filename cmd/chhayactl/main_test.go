@@ -197,3 +197,51 @@ func TestBotCheckRefusesWhenAnEnvFileIsMissing(t *testing.T) {
 		t.Fatal("a missing env file must be refused")
 	}
 }
+
+func testBackupDeps(now time.Time) backupDeps {
+	return backupDeps{
+		now:   func() time.Time { return now },
+		check: func(string) error { return nil },
+		run:   func(string, ...string) error { return nil },
+	}
+}
+
+func TestBackupStatusFailsWithNoBackupAndPassesAfterPush(t *testing.T) {
+	home := filepath.Join(t.TempDir(), ".chhaya")
+	for _, d := range []string{"hermes", "gateway"} {
+		os.MkdirAll(filepath.Join(home, d), 0o700)
+	}
+	os.WriteFile(filepath.Join(home, "hermes", "a"), []byte("x"), 0o600)
+	now := time.Date(2026, 11, 10, 20, 30, 0, 0, time.UTC)
+	d := testBackupDeps(now)
+
+	if err := runBackup([]string{"status", "-home", home}, &bytes.Buffer{}, d); err == nil {
+		t.Fatal("status must fail before any backup")
+	}
+	var out bytes.Buffer
+	if err := runBackup([]string{"create", "-home", home}, &out, d); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	archive := strings.TrimSpace(out.String())
+	if err := runBackup([]string{"verify", archive}, &bytes.Buffer{}, d); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if err := runBackup([]string{"push", "-home", home, "-s3", "s3://b/backups", archive}, &bytes.Buffer{}, d); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if err := runBackup([]string{"status", "-home", home}, &bytes.Buffer{}, d); err != nil {
+		t.Fatalf("status after push: %v", err)
+	}
+	if err := runBackup([]string{"status", "-home", home}, &bytes.Buffer{}, testBackupDeps(now.Add(40*time.Hour))); err == nil {
+		t.Fatal("status must fail once the backup is older than 36h")
+	}
+}
+
+func TestBackupRejectsUnknownCommandsAndMissingArguments(t *testing.T) {
+	d := testBackupDeps(time.Now())
+	for _, args := range [][]string{{}, {"nope"}, {"verify"}, {"push", "x"}, {"pull", "s3://a/b"}} {
+		if err := runBackup(args, &bytes.Buffer{}, d); err == nil {
+			t.Errorf("backup %v must be an error", args)
+		}
+	}
+}

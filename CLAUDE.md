@@ -51,7 +51,8 @@ config/policy.yaml  caps, allowlists, repo list
 evals/              L0 ops, L1 safety, L2 failure modes, L3 taste
 deploy/             docker-compose.yml (same file on desktop and EC2)
 infra/terraform/    the EC2 box, bucket and snapshots (Mumbai)
-scripts/            dev.sh, chhaya-backup.sh, install-aws-tools.sh
+scripts/            dev.sh (incl. backup), install-aws-tools.sh
+internal/backup/    verified backup and restore of ~/.chhaya (run via chhayactl backup)
 docs/               design.md, decisions.md, diagrams/
 ```
 
