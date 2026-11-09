@@ -105,8 +105,7 @@ role's credentials; `ignore_changes = [ami, user_data]` on the instance, so a ne
 the instance and its data; bucket named `chhaya-backup-<account>-<region>`, noncurrent versions
 expire after 30 days; Go and the AWS CLI come from snaps (`go` 1.25/stable and `aws-cli` v2/stable exist in the snap store, checked 2026-11-09).
 
-Terraform state starts local and is **not** committed (`*.tfstate` gitignored). Moving it to an
-S3 backend is a later change. Never put a secret in a `.tf` file or a variable default.
+Terraform state is **not** committed (`*.tfstate` gitignored); it lives in the S3 backend described under open items. Never put a secret in a `.tf` file or a variable default.
 
 ## Order of work
 
@@ -186,8 +185,7 @@ box only; take a backup from the box first if there are any worth keeping.
   you are sure the box needs no rebuild from it.
 - **First EBS snapshot** has not been confirmed. DLM runs daily at 21:00 UTC; check
   `aws ec2 describe-snapshots --owner-ids self` after that.
-- **Terraform state** is `infra/terraform/terraform.tfstate`, local and gitignored. Keep a copy
-  off this disk.
+- **Terraform state** moved to S3 on 2026-11-09: `s3://chhaya-backup-803874683069-ap-south-1/terraform/chhaya-box.tfstate` (same bucket as the backups, encrypted, versioned, S3-native locking). It holds no secrets (scanned). The box's role can read and write that bucket, so it could touch its own state; accepted under the trusted-host assumption, and a separate bucket is the fix if that changes. A pre-migration copy is in `~/.chhaya/backups/terraform.tfstate.pre-s3-backend`.
 - **Digest job** is enabled on both the desktop copy and the box, so both send it. Disable it
   in the desktop's `~/.chhaya/hermes/cron/jobs.json` when that stops being wanted.
 - **Admin access keys** for `chhaya-admin` are in `~/.aws/credentials`. Rotate or delete them
@@ -198,5 +196,5 @@ box only; take a backup from the box first if there are any worth keeping.
 
 ## Not in scope
 
-New features, the evaluation tooling, an S3 backend for Terraform state, Secrets Manager, and a
+New features, the evaluation tooling, Secrets Manager, and a
 multi-instance or HA setup. Eval and measurement tooling comes after deployment is stable.
