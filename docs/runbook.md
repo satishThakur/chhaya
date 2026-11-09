@@ -64,6 +64,8 @@ even though the token is valid. The gateway probes the approver chat at startup
 and refuses to start if it cannot reach it, so skipping this looks like a
 configuration error.
 
+**Shipping changes to the box:** see `docs/ship-a-change.md`.
+
 **The box.** Production runs on one EC2 instance in Mumbai with no inbound ports. Open a
 shell with `aws ssm start-session --region ap-south-1 --target <instance id from terraform output>`,
 then `sudo -iu ubuntu` and `cd ~/chhaya`; the same `make dev-*` verbs work there. After a `git pull`

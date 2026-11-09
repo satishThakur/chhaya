@@ -53,6 +53,8 @@ Tap approve and the gateway appends `- No okra. <!-- proposal <id>, approved <da
 revertable. Hermes plays no part between the proposal and
 the write. A tap is refused while `/stop` is on, or if the proposal changed after its card was posted.
 
+Shipping a change to the production box: [`docs/ship-a-change.md`](docs/ship-a-change.md).
+
 ## Running it locally
 
 Needs Docker, Go 1.25+, and two Telegram bots: one for Hermes, one for the approver. Each environment
