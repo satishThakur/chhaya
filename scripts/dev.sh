@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Local development control for the two-container stack.
 #
-#   scripts/dev.sh up|down|restart|status|logs|audit|stop|resume|doctor
+#   scripts/dev.sh up|down|restart|status|logs|audit|stop|resume|doctor|backup
 #
 # Invoked through the Makefile (`make dev-up`), which is where the verbs are
 # discoverable. The logic lives here because preflight needs real conditionals.
@@ -319,6 +319,10 @@ cmd_status() {
   else
     ylw "gateway did not accept Hermes' certificate — check 'make dev-logs gateway'"
   fi
+  # On prod, a backup that silently stopped running is the failure to catch.
+  if grep -qx 'CHHAYA_ENV=prod' "$DEPLOY/.env.gateway" 2>/dev/null; then
+    (cd "$ROOT" && go run ./cmd/chhayactl backup status) 2>&1 | sed 's/^chhayactl: //' | { read -r l; case "$l" in ok:*) grn "$l" ;; *) ylw "backup: $l" ;; esac; }
+  fi
 }
 
 # The audit log lives in a named volume, so read it through a container.
@@ -331,6 +335,32 @@ cmd_audit() {
 cmd_stop()   { "${COMPOSE[@]}" exec -T gateway chhayactl -data /data stop; }
 cmd_resume() { "${COMPOSE[@]}" exec -T gateway chhayactl -data /data resume; }
 cmd_verify() { "${COMPOSE[@]}" exec -T gateway chhayactl -data /data audit verify; }
+
+# Nightly backup (cron on the box; see deploy/crontab.box). Stops the stack for the few
+# seconds the copy takes, because a cold copy is exactly consistent and needs no SQLite
+# library in our code; restarts it before the slow upload. The restart is trapped so a
+# failed backup can never leave the stack down. Only restarts what was running.
+# Needs CHHAYA_BACKUP_S3=s3://bucket/prefix. docs/decisions.md, 2026-11-09.
+cmd_backup() {
+  [ -n "${CHHAYA_BACKUP_S3:-}" ] || die "set CHHAYA_BACKUP_S3=s3://bucket/prefix"
+  (cd "$ROOT" && go build -o bin/chhayactl ./cmd/chhayactl) || die "could not build chhayactl"
+  local ctl="$ROOT/bin/chhayactl" was_up=0 archive
+  [ -n "$("${COMPOSE[@]}" ps --status running -q 2>/dev/null)" ] && was_up=1
+  if [ "$was_up" -eq 1 ]; then
+    trap '"${COMPOSE[@]}" start' EXIT
+    "${COMPOSE[@]}" stop
+  fi
+  archive="$("$ctl" backup create)" || die "backup create failed; the stack is being restarted"
+  if [ "$was_up" -eq 1 ]; then
+    "${COMPOSE[@]}" start
+    trap - EXIT
+  fi
+  "$ctl" backup push -s3 "$CHHAYA_BACKUP_S3" "$archive"
+  # Keep the newest three local copies; S3 keeps the rest (30 days, by lifecycle rule).
+  local old; old="$(ls -1t "$(dirname "$archive")"/chhaya-data-*.tar.gz 2>/dev/null | tail -n +4)"
+  [ -z "$old" ] || printf '%s\n' "$old" | while read -r f; do rm -f "$f" "$f.sha256"; done
+  grn "backup done: $(basename "$archive")"
+}
 
 cmd_doctor() { preflight && grn "ready to start"; }
 
@@ -346,9 +376,11 @@ case "${1:-}" in
   resume)  cmd_resume ;;
   certs)   cmd_certs ;;
   doctor)  cmd_doctor ;;
+  backup)  cmd_backup ;;
   *) cat >&2 <<'USAGE'
 usage: scripts/dev.sh <command>
 
+  backup    stop, back up to S3, restart (needs CHHAYA_BACKUP_S3)
   doctor    check env files, tokens, certs — changes nothing
   certs     generate the CA and both certificates (once)
   up        preflight, render Hermes' config, build and start both containers

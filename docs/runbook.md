@@ -67,7 +67,8 @@ configuration error.
 **The box.** Production runs on one EC2 instance in Mumbai with no inbound ports. Open a
 shell with `aws ssm start-session --region ap-south-1 --target <instance id from terraform output>`,
 then `sudo -iu ubuntu` and `cd ~/chhaya`; the same `make dev-*` verbs work there. Backups:
-`scripts/chhaya-backup.sh create` (stack down), `push`, `pull`, `restore`.
+`chhayactl backup create|verify|restore|push|pull|status` (stack down for create and restore);
+`make dev-backup` does stop, backup, restart, upload in one go. Nightly at 02:00 IST via `deploy/crontab.box`.
 
 **5. Start:**
 

@@ -133,7 +133,7 @@ Each step leaves the live setup untouched until the cutover.
 
 ## Handover done (2026-11-09)
 
-`scripts/chhaya-backup.sh` (create / push / pull / restore) took a verified tarball of
+A shell script (since replaced by `chhayactl backup`, below) took a verified tarball of
 `~/.chhaya/{hermes,gateway}` with the stack down, tested a restore into a scratch directory
 (including refusing to overwrite and catching a tampered file), uploaded it to
 `s3://chhaya-backup-803874683069-ap-south-1/handover/`, and restored it on the box. Counts
@@ -179,6 +179,24 @@ box only; take a backup from the box first if there are any worth keeping.
 - **Secrets on the box** are plain files. Fine under the trusted-host assumption; Secrets
   Manager is the planned upgrade.
 
+## Nightly backup
+
+`chhayactl backup create | verify | restore | push | pull | status` (Go, `internal/backup`) runs
+from the host, where both `~/.chhaya/hermes` and `~/.chhaya/gateway` are visible. `scripts/dev.sh
+backup` (`make dev-backup`) wraps it: stop the stack, take a cold copy, restart, then upload to
+`s3://<bucket>/backups/`. Cron on the box runs it at **02:00 IST (20:30 UTC)** from
+`deploy/crontab.box`. S3 keeps **30 days** (lifecycle rule in `infra/terraform/s3.tf`); the box
+keeps the newest three locally.
+
+Each archive holds `MANIFEST.json` (every file's size, mode and SHA-256) and has a `.sha256`
+sidecar. Restore needs both, never overwrites, extracts to a temporary directory, checks the
+manifest, runs `PRAGMA integrity_check` on every database and verifies the audit chain, and only
+then moves the data into place. It refuses symlinks, absolute or `..` paths and anything outside
+`hermes/` and `gateway/`. Create refuses a database that fails its check or a broken audit chain.
+The box needs the `sqlite3` CLI; without it the check fails closed.
+
+`make dev-status` on prod warns if the last successful upload is older than 36 hours.
+
 ## After the cutover (open items)
 
 - **Step 8:** the handover tarball is still in the bucket under `handover/`. Delete it once
@@ -190,8 +208,9 @@ box only; take a backup from the box first if there are any worth keeping.
   in the desktop's `~/.chhaya/hermes/cron/jobs.json` when that stops being wanted.
 - **Admin access keys** for `chhaya-admin` are in `~/.aws/credentials`. Rotate or delete them
   when no longer building.
-- **Daily backup to S3** is not scheduled yet; only EBS snapshots run. `scripts/chhaya-backup.sh`
-  does the work and needs a cron or timer.
+- **Nightly backup to S3** is built (`chhayactl backup`, `scripts/dev.sh backup`,
+  `deploy/crontab.box`) but not installed on the box until the first live run is approved.
+  See the section below.
 - The desktop's old Docker volumes `deploy_hermes-data` and `deploy_gateway-data` still exist.
 
 ## Not in scope

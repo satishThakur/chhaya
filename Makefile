@@ -1,6 +1,6 @@
 .PHONY: test build evals e2e help \
         dev-doctor dev-certs dev-up dev-down dev-restart dev-status \
-        dev-logs dev-audit dev-verify dev-stop dev-resume
+        dev-logs dev-audit dev-verify dev-stop dev-resume dev-backup
 
 # Default target: show what there is, because a Makefile nobody can read is a
 # script with extra steps.
@@ -21,6 +21,7 @@ help:
 	@echo '  make dev-verify    walk the audit hash chain from genesis'
 	@echo '  make dev-stop      kill switch ON  (via chhayactl, not the bot)'
 	@echo '  make dev-resume    kill switch off'
+	@echo '  make dev-backup    stop, back up to S3, restart (needs CHHAYA_BACKUP_S3)'
 	@echo '  make dev-down      stop both containers'
 
 # Every dev verb is one line here and all the logic is in scripts/dev.sh —
@@ -36,6 +37,7 @@ dev-audit:   ; @scripts/dev.sh audit
 dev-verify:  ; @scripts/dev.sh verify
 dev-stop:    ; @scripts/dev.sh stop
 dev-resume:  ; @scripts/dev.sh resume
+dev-backup:  ; @scripts/dev.sh backup
 
 .PHONY: test build evals e2e
 
