@@ -683,3 +683,11 @@ Recorded in full in `docs/deployment.md`. The choices, so they are not re-litiga
 
 **Reopen if:** the pinned Hermes image has no arm64 build and cost matters, the box needs a
 second user or inbound access, or the bot naming convention stops being enforceable.
+
+## 2026-11-09: Bot-environment guard (`CHHAYA_ENV` + `getMe`)
+
+**Decision.** Both env files declare `CHHAYA_ENV=dev|prod` (exact, no default, must agree). Preflight (`make dev-doctor`, `dev-up`) runs `chhayactl botcheck`, which calls Telegram `getMe` on each token and refuses unless: dev bots' usernames contain `_dev_` and prod ones don't; the approver's username contains `approver` and Hermes' doesn't; the two tokens are different bots. Unreachable Telegram, a missing or unknown `CHHAYA_ENV`, or Go missing on the host are refusals. Logic lives in `internal/botguard` (tests cover each refusal); errors and output never include a token.
+
+**Why.** One bot token, one poller: two machines on the same bot drop messages (409) and can misroute an approval tap. Dev and prod have separate bot pairs (`docs/deployment.md`), and the only safe way to keep it that way is to check, not to remember.
+
+**Consequences.** The check needs Go on the host (the box's `user_data` must install it, or the check moves into a container). It checks at start only; it cannot stop someone editing a token after `up`. The gateway does not re-check its own token at runtime yet. Existing env files must gain `CHHAYA_ENV` (the current desktop setup uses the prod bots, so `prod` until step 2 of the deployment plan).

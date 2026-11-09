@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -119,5 +120,80 @@ func TestRunExplainPrintsConfiguration(t *testing.T) {
 		if !strings.Contains(output, expected) {
 			t.Errorf("output missing expected string %q: %q", expected, output)
 		}
+	}
+}
+
+type fakeBot struct {
+	id   int64
+	name string
+	err  error
+}
+
+func (f fakeBot) GetMe(context.Context) (int64, string, error) { return f.id, f.name, f.err }
+
+func botEnvFiles(t *testing.T, hermesEnv, gatewayEnv string) (string, string) {
+	t.Helper()
+	d := t.TempDir()
+	h, g := filepath.Join(d, ".env.hermes"), filepath.Join(d, ".env.gateway")
+	os.WriteFile(h, []byte("CHHAYA_ENV="+hermesEnv+"\nTELEGRAM_BOT_TOKEN=111:hermes-secret\n"), 0o600)
+	os.WriteFile(g, []byte("CHHAYA_ENV="+gatewayEnv+"\nCHHAYA_APPROVER_BOT_TOKEN=222:approver-secret\n"), 0o600)
+	return h, g
+}
+
+func TestBotCheckPassesForTheMatchingPairAndNeverPrintsATokenOrReadsTheWrongOne(t *testing.T) {
+	h, g := botEnvFiles(t, "dev", "dev")
+	var gotTokens []string
+	mk := func(token string) botGetter {
+		gotTokens = append(gotTokens, token)
+		if token == "111:hermes-secret" {
+			return fakeBot{1, "chhaya_dev_bot", nil}
+		}
+		return fakeBot{2, "chhaya_dev_approver_bot", nil}
+	}
+	var out bytes.Buffer
+	if err := runBotCheck(h, g, mk, &out); err != nil {
+		t.Fatalf("matching dev pair must pass: %v", err)
+	}
+	if strings.Contains(out.String(), "secret") {
+		t.Errorf("output must never contain a token: %q", out.String())
+	}
+	if len(gotTokens) != 2 {
+		t.Errorf("expected one lookup per token, got %v", gotTokens)
+	}
+}
+
+func TestBotCheckRefusesProdBotsInADevEnvironment(t *testing.T) {
+	h, g := botEnvFiles(t, "dev", "dev")
+	mk := func(token string) botGetter {
+		if token == "111:hermes-secret" {
+			return fakeBot{1, "chhaya_bot", nil}
+		}
+		return fakeBot{2, "chhaya_approver_bot", nil}
+	}
+	var out bytes.Buffer
+	err := runBotCheck(h, g, mk, &out)
+	if err == nil {
+		t.Fatal("prod bots in a dev environment must be refused")
+	}
+	if strings.Contains(err.Error(), "secret") {
+		t.Errorf("error must never contain a token: %v", err)
+	}
+}
+
+func TestBotCheckRefusesWhenATokenIsMissing(t *testing.T) {
+	h, g := botEnvFiles(t, "dev", "dev")
+	os.WriteFile(g, []byte("CHHAYA_ENV=dev\nCHHAYA_APPROVER_BOT_TOKEN=\n"), 0o600)
+	mk := func(string) botGetter { return fakeBot{1, "chhaya_dev_bot", nil} }
+	if err := runBotCheck(h, g, mk, &bytes.Buffer{}); err == nil {
+		t.Fatal("an empty token must be refused, not skipped")
+	}
+}
+
+func TestBotCheckRefusesWhenAnEnvFileIsMissing(t *testing.T) {
+	h, g := botEnvFiles(t, "dev", "dev")
+	os.Remove(g)
+	mk := func(string) botGetter { return fakeBot{1, "chhaya_dev_bot", nil} }
+	if err := runBotCheck(h, g, mk, &bytes.Buffer{}); err == nil {
+		t.Fatal("a missing env file must be refused")
 	}
 }

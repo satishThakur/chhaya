@@ -91,7 +91,7 @@ Planned resources, in the default VPC to start:
 - Root EBS: gp3, encrypted, 30 GB to start.
 - `aws_dlm_lifecycle_policy`: daily snapshots, retain 14.
 - `aws_s3_bucket` for backups: encrypted, versioned, all public access blocked.
-- `user_data`: install Docker, the Compose plugin, git and the AWS CLI; clone this repo over
+- `user_data`: install Docker, the Compose plugin, git, Go (the bot check runs `chhayactl botcheck` on the host) and the AWS CLI; clone this repo over
   HTTPS (it is public, so no deploy key); do not start the stack. The stack starts only after
   secrets and data are in place.
 

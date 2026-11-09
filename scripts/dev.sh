@@ -152,6 +152,21 @@ preflight() {
   has_key "$DEPLOY/.env.gateway" CHHAYA_APPROVER_BOT_TOKEN   || { red "deploy/.env.gateway: CHHAYA_APPROVER_BOT_TOKEN is empty — no approval channel, no kill switch"; fail=1; }
   has_key "$DEPLOY/.env.gateway" CHHAYA_APPROVER_ALLOWED_USERS || { red "deploy/.env.gateway: CHHAYA_APPROVER_ALLOWED_USERS is empty"; fail=1; }
 
+  # --- the tokens belong to this environment -------------------------------
+  # One bot token, one poller: dev and prod have separate bot pairs, and getMe
+  # (read-only) says who each token really is. Fails closed, including when
+  # Telegram is unreachable. docs/deployment.md.
+  if [ "$fail" -eq 0 ]; then
+    if ! command -v go >/dev/null 2>&1; then
+      red "bot check needs Go on this machine (it runs chhayactl botcheck) — install Go 1.24+"
+      fail=1
+    elif ! botout="$(cd "$ROOT" && go run ./cmd/chhayactl botcheck -hermes-env "$DEPLOY/.env.hermes" -gateway-env "$DEPLOY/.env.gateway" 2>&1)"; then
+      printf '%s\n' "$botout" | sed 's/^/  /'
+      red "bot check failed — see above. Nothing was started."
+      fail=1
+    fi
+  fi
+
   # --- the model is chosen -------------------------------------------------
   # Not secret, so these live in .env.hermes next to the key they pair with.
   has_key "$DEPLOY/.env.hermes" CHHAYA_HERMES_MODEL    || { red "deploy/.env.hermes: CHHAYA_HERMES_MODEL is unset — e.g. CHHAYA_HERMES_MODEL=claude-sonnet-5"; fail=1; }
