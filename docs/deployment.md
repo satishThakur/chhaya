@@ -95,9 +95,12 @@ Planned resources, in the default VPC to start:
 - Root EBS: gp3, encrypted, 30 GB to start.
 - `aws_dlm_lifecycle_policy`: daily snapshots, retain 14.
 - `aws_s3_bucket` for backups: encrypted, versioned, all public access blocked.
-- `user_data`: install Docker, the Compose plugin, git, Go (the bot check runs `chhayactl botcheck` on the host) and the AWS CLI; clone this repo over
-  HTTPS (it is public, so no deploy key); do not start the stack. The stack starts only after
-  secrets and data are in place.
+- `user_data`: install git, clone this repo over HTTPS (it is public, so no deploy key) and run
+  `scripts/box-setup.sh`, which holds the real list of what the box needs (Docker, Compose, git,
+  make, sqlite3, cron, the Go and AWS CLI snaps, docker group). It does not start the stack, and
+  it does not install the backup cron (no data to back up yet). Because Terraform ignores later
+  `user_data` edits, a live box is kept in step by re-running the script: `sudo scripts/box-setup.sh`
+  after a `git pull` (`scripts/box-setup.sh --check --cron` changes nothing and lists what is missing).
 
 Built in `infra/terraform/` and applied 2026-11-09 (account 803874683069): instance `i-0741a78bba409c0a9`, bucket `chhaya-backup-803874683069-ap-south-1`. The default VPC is deliberate: the box has no inbound rules and an otherwise empty VPC, and a private subnet would add a NAT gateway for no gain. Move to a custom VPC if the box ever serves inbound traffic or other machines join the VPC. Choices beyond
 the list above: IMDSv2 only with hop limit 1, so containers on the box cannot reach the instance

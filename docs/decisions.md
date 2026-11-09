@@ -711,3 +711,11 @@ second user or inbound access, or the bot naming convention stops being enforcea
 **Format and checks.** One tarball with `MANIFEST.json` as its last entry (every file's size, mode, SHA-256) plus a `.sha256` sidecar. Restore needs both: the sidecar catches damage in transit, the manifest catches an archive rebuilt with a fixed-up sidecar. Restore never overwrites, extracts to a temp directory, then moves into place; refuses symlinks, special files, absolute or `..` paths and anything outside `hermes/` and `gateway/`. Lock files and sockets are excluded. Create refuses a failing database or a broken audit chain. Each safety check has a test that fails when the check is removed (mutation-checked).
 
 **Consequences.** Upload and download shell out to the `aws` CLI so the instance role is used and no AWS SDK enters our code. The box stops for a few seconds nightly; a missed run shows as a stale-backup warning in `make dev-status` on prod. Remote triggering (EventBridge to SSM Run Command) is the next step and changes nothing in the tool.
+
+## 2026-11-09: The box's requirements live in `scripts/box-setup.sh`, not in `user_data`
+
+**Decision.** `scripts/box-setup.sh` installs everything the box needs and is idempotent; `infra/terraform/user_data.sh` only installs git, clones the repo and runs it. `--check` changes nothing and lists what is missing; `--cron` also installs `deploy/crontab.box`.
+
+**Why.** Terraform ignores `user_data` edits on purpose (`ignore_changes`), because replacing the instance would delete its data. That left the live box and its bootstrap free to drift: `sqlite3` was added to the script but had to be installed by hand. A script in the repo can be re-run on the live box after a `git pull`.
+
+**Consequences.** First boot now runs code from `main` of the public repo, so a bad push to `main` affects a new box. The backup cron is opt-in because a fresh box has no data yet.
