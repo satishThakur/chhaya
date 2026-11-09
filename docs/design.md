@@ -332,6 +332,8 @@ flowchart LR
 
 ## Traces and labeling
 
+> **Superseded in part (2026-11-09).** The label schema and Langfuse below are replaced by [`observability-and-evals.md`](observability-and-evals.md): failure modes come from error analysis of real traces, and traces are read with `chhayactl trace`. The trace definition and capture points still describe the end state.
+
 **Requirement:** every task gets a complete trace, reviewable and annotatable in a friendly UI. At 4–5 tasks a day (about 150 a month), I can label every one, and labels are the main way the agent learns.
 
 ![Learning loop: a task runs, is traced, is labeled, and feeds three outputs](diagrams/learning-loop.png)
@@ -392,6 +394,8 @@ The gateway stamps the same id on its spans, and the session store is keyed by i
 Each label feeds three places: an approved memory or skill change, a new eval case, and the learning metrics.
 
 ## Evals
+
+> **How we build these:** [`observability-and-evals.md`](observability-and-evals.md) is the working design for L2 (cases from error analysis, replayed, checked by code) and for when a judge may be used.
 
 Four tiers, from cheap and deterministic to judged. The lower tiers are monitors that should never be wrong; the upper tiers grow out of my labels.
 

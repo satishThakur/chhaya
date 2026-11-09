@@ -2,7 +2,7 @@
 
 Chhaya is a personal chief-of-staff agent. [Hermes](https://github.com/NousResearch/hermes-agent) is an adopted dependency that provides the agent loop; everything in this repo is ours.
 
-Read `docs/design.md` before non-trivial work. Read `docs/decisions.md` before re-opening a settled question — it records what was decided and what evidence would reopen it. `docs/learnings.md` records what went wrong and what we found; add to it when something surprises us.
+Read `docs/design.md` before non-trivial work. Read `docs/decisions.md` before re-opening a settled question — it records what was decided and what evidence would reopen it. `docs/learnings.md` records what went wrong and what we found; add to it when something surprises us. `docs/observability-and-evals.md` is the working design for traces and evals.
 
 ## The one rule
 
