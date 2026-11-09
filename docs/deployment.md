@@ -83,9 +83,11 @@ Planned resources, in the default VPC to start:
 
 - `aws_instance`: Ubuntu 24.04, **x86_64**, `t3.medium` to start. Chosen because Hermes' browser
   tool ran a real Chromium in the logs. **Unverified:** the real memory use, and whether the
-  pinned Hermes image is published for arm64. Start x86_64, measure, resize. `t4g` (Graviton) is
-  cheaper but only if the image supports it.
-- `aws_security_group`: no ingress; egress 443 (and 53) only.
+  pinned Hermes image is published for arm64. The pinned digest is a single-platform amd64 manifest
+  (checked 2026-11-09), so the box must be x86_64; `t4g` (Graviton) is out until the pin changes.
+  On the desktop Hermes used ~300 MiB idle. Start `t3.medium`, measure under real use, resize.
+- `aws_security_group`: no ingress; egress 443, 53 and 80. Port 80 was added to the plan: Ubuntu's
+  apt mirrors are plain http (packages are signature-checked).
 - `aws_iam_role` + instance profile: `AmazonSSMManagedInstanceCore`, plus a policy scoped to
   the backup bucket.
 - Root EBS: gp3, encrypted, 30 GB to start.
@@ -94,6 +96,12 @@ Planned resources, in the default VPC to start:
 - `user_data`: install Docker, the Compose plugin, git, Go (the bot check runs `chhayactl botcheck` on the host) and the AWS CLI; clone this repo over
   HTTPS (it is public, so no deploy key); do not start the stack. The stack starts only after
   secrets and data are in place.
+
+Built in `infra/terraform/` (`terraform validate` passes; not yet planned or applied). Choices beyond
+the list above: IMDSv2 only with hop limit 1, so containers on the box cannot reach the instance
+role's credentials; `ignore_changes = [ami, user_data]` on the instance, so a new AMI never replaces
+the instance and its data; bucket named `chhaya-backup-<account>-<region>`, noncurrent versions
+expire after 30 days; Go and the AWS CLI come from snaps (`go --channel=1.25/stable` is unverified).
 
 Terraform state starts local and is **not** committed (`*.tfstate` gitignored). Moving it to an
 S3 backend is a later change. Never put a secret in a `.tf` file or a variable default.
