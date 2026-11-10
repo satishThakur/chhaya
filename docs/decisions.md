@@ -739,3 +739,13 @@ second user or inbound access, or the bot naming convention stops being enforcea
 **Consequences.** Labeling is desktop-only for now; a presigned-URL variant for a phone can implement the same three-call data interface. `evals/` needs its own lifecycle rule (no expiry). The box role's `DeleteObject` on `bucket/*` is broader than needed and is the owner's to narrow.
 
 **Reopen if:** labeling on a phone matters enough to justify presigned URLs, or the unsynced-annotation window loses a note.
+
+## 2026-11-10: S3 expiry rules are scoped by prefix; `evals/` expires nothing
+
+**Decision.** The bucket's lifecycle rules in `infra/terraform/s3.tf` name their prefixes: `backups/` (current objects 30 days, then noncurrent 30), and noncurrent-version expiry of 30 days on `handover/`, `terraform/` and `tools/`. A bucket-wide rule remains only for aborting incomplete uploads. `evals/` is in no expiry rule.
+
+**Why.** The old `expire-old-versions` rule had an empty filter, which is the whole bucket. An S3 lifecycle filter can include a prefix but cannot exclude one, so an `evals/` rule could not override it; annotations are overwritten in place, and their old versions would have been deleted after 30 days. Annotations and eval cases are the owner's labelled data and are tiny.
+
+**Consequences.** A new top-level prefix gets no expiry until it is added to `expiring_prefixes`; it fails safe, but it can grow. The Terraform state file under `terraform/` keeps the same 30-day rule it had.
+
+**Reopen if:** `evals/` grows large enough to cost money (traces are the part that would), at which point trace objects could move under their own prefix with an expiry, leaving annotations alone.

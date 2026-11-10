@@ -355,10 +355,11 @@ proxy for per-call traces, an annotation UI better than the CLI, the monthly abl
   (`hermes chat --help`, checked 2026-11-09). Not verified: that a one-shot run loads
   `mcp_servers.chhaya`, writes its session to `state.db`, and that `--format stream-json` carries
   tool calls. Step 3 verifies it.
-- **Lifecycle for `evals/`.** The bucket has an `expire-old-versions` rule (30 days, noncurrent)
-  that may be bucket-wide, and `expire-nightly-backups` on `backups/`. Check the first rule's
-  filter; `evals/` needs its own rule with no expiry so an overwritten annotation stays
-  recoverable. Terraform change, before the first Export.
+- **Lifecycle for `evals/`.** Checked 2026-11-10: `expire-old-versions` was bucket-wide
+  (`filter {}`), so it would have deleted old versions of annotations after 30 days, and S3
+  filters cannot exclude a prefix. `infra/terraform/s3.tf` now scopes the expiry rules to
+  `backups/`, `handover/`, `terraform/` and `tools/`; `evals/` is in none of them, so nothing
+  under it ever expires. Planned (1 change, 0 destroy); **apply before the first Export.**
 - **Delete permission.** The box role can delete any object in the bucket. Versioning limits the
   damage, and containers cannot reach the role. Narrowing `DeleteObject` to `evals/*` is the
   owner's IAM call.
@@ -395,5 +396,5 @@ embedded in the binary.
   visible; it is not corrected in code.
 - **Cost shows $0.000** for sessions where Hermes did not record one; treat it as unknown.
 - **Cron sessions** appear as traces too (source `cron`), with long ids; they are in the list.
-- **`evals/` still has no lifecycle rule**; add it before the first Export (see open questions).
+- **`evals/` lifecycle:** fixed in Terraform, applied by the owner before the first Export (see open questions).
 - **The mode field is free text** until `modes.yaml` exists (step 2).
