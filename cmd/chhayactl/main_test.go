@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -242,6 +244,78 @@ func TestBackupRejectsUnknownCommandsAndMissingArguments(t *testing.T) {
 	for _, args := range [][]string{{}, {"nope"}, {"verify"}, {"push", "x"}, {"pull", "s3://a/b"}} {
 		if err := runBackup(args, &bytes.Buffer{}, d); err == nil {
 			t.Errorf("backup %v must be an error", args)
+		}
+	}
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTraceExportReportsAndPassesItsFlags(t *testing.T) {
+	var gotArgs [][]string
+	d := traceDeps{
+		now:   func() time.Time { return time.Unix(1794203400, 0) },
+		query: func(db, sql string) ([]byte, error) { return nil, nil },
+		run: func(name string, args ...string) ([]byte, error) {
+			gotArgs = append(gotArgs, args)
+			return nil, nil
+		},
+	}
+	home := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(home, "gateway"), 0o700))
+	must(t, os.WriteFile(filepath.Join(home, "gateway", "audit.jsonl"), nil, 0o600))
+	var out bytes.Buffer
+	if err := runTrace([]string{"export", "-home", home, "-out", t.TempDir(), "-since", "3d"}, &out, d); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "exported 0 trace(s)") {
+		t.Errorf("output = %q", out.String())
+	}
+	if err := runTrace([]string{"export", "-since", "soon"}, &out, d); err == nil {
+		t.Error("a bad -since must be an error")
+	}
+	if err := runTrace([]string{"export", "extra"}, &out, d); err == nil {
+		t.Error("stray arguments must be an error")
+	}
+	if err := runTrace([]string{"frobnicate"}, &out, d); err == nil {
+		t.Error("unknown subcommand must be an error")
+	}
+}
+
+func TestTraceServeBindsOnlyToLoopback(t *testing.T) {
+	var bound string
+	d := traceDeps{
+		now: time.Now,
+		serve: func(ln net.Listener, h http.Handler) error {
+			bound = ln.Addr().String()
+			return nil
+		},
+	}
+	var out bytes.Buffer
+	if err := runTrace([]string{"serve", "-dir", t.TempDir(), "-port", "0"}, &out, d); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(bound, "127.0.0.1:") {
+		t.Fatalf("listening on %q; the page shows private conversations and must never leave loopback", bound)
+	}
+	if !strings.Contains(out.String(), "http://127.0.0.1:") {
+		t.Errorf("output = %q", out.String())
+	}
+}
+
+func TestParseSince(t *testing.T) {
+	for in, want := range map[string]time.Duration{"2d": 48 * time.Hour, "36h": 36 * time.Hour, "0.5d": 12 * time.Hour} {
+		if got, err := parseSince(in); err != nil || got != want {
+			t.Errorf("parseSince(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"", "d", "-1d", "x", "-3h"} {
+		if _, err := parseSince(bad); err == nil {
+			t.Errorf("parseSince(%q) accepted", bad)
 		}
 	}
 }

@@ -53,6 +53,7 @@ deploy/             docker-compose.yml (same file on desktop and EC2)
 infra/terraform/    the EC2 box, bucket and snapshots (Mumbai)
 scripts/            dev.sh (incl. backup), box-setup.sh (EC2 box, idempotent), install-aws-tools.sh
 internal/backup/    verified backup and restore of ~/.chhaya (run via chhayactl backup)
+internal/trace/     per-session traces from state.db + the audit log; annotation page (chhayactl trace)
 docs/               design.md, decisions.md, diagrams/
 ```
 

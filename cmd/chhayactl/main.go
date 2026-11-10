@@ -47,6 +47,8 @@ func main() {
 		err = runStop(filepath.Join(*dataDir, "state.json"), false, os.Stdout)
 	case "backup":
 		err = runBackup(args[1:], os.Stdout, realBackupDeps())
+	case "trace":
+		err = runTrace(args[1:], os.Stdout, realTraceDeps())
 	case "botcheck":
 		fs := flag.NewFlagSet("botcheck", flag.ExitOnError)
 		hermesEnv := fs.String("hermes-env", "deploy/.env.hermes", "Hermes env file")
@@ -79,6 +81,7 @@ func usage() {
   stop             set the kill switch without the daemon
   resume           clear the kill switch
   backup           create | verify | restore | push | pull | status (chhayactl backup for detail)
+  trace            export | serve: per-session traces and the annotation page (chhayactl trace for detail)
   botcheck         confirm both bot tokens belong to this CHHAYA_ENV (calls Telegram getMe)
   policy explain   print the values the gateway is enforcing
 `)
