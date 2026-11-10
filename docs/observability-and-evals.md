@@ -1,6 +1,7 @@
 # Observability and evals
 
-Status: design, 2026-11-09. Nothing here is built yet except where it says so. This document
+Status: design, 2026-11-09. Step 1 of the build order (trace export and the annotation page) is built and
+tested as of 2026-11-10; everything after it is design only. This document
 replaces the label schema and the Langfuse choice in `docs/design.md` (Traces and labeling,
 Evals); the learning metrics and the monthly ablation there still stand and come later.
 
@@ -125,12 +126,14 @@ chhayactl trace export [-home DIR] [-s3 URI] [-since 2d]   build trace objects f
                                                            audit.jsonl; upload to evals/days/...
 chhayactl trace serve  [-s3 URI] [-dir ~/.chhaya/evals] [-port 8787]
                                                            the annotation page on 127.0.0.1
-chhayactl trace list | show <id> | stats                   the same traces as terminal text
-                                                           (fallback, and for scripts)
 ```
 
+`trace list | show | stats` (the same traces as terminal text) were in the first draft of this design
+and are not built: the page covers reading, and `trace export`'s JSON is the input for scripts.
+
 `export` also runs on the desktop against a restored backup (`-home` points at it, `-s3` is
-omitted to write files only), which is how it is tested and how an old backup is analysed.
+omitted to write files only), which is how it is tested and how an old backup is analysed. The
+box runs it nightly at 02:45 IST from `deploy/crontab.box`, after the backup.
 
 ### The page (`trace serve`)
 
@@ -324,7 +327,7 @@ the intervals separate.
 
 Each step ends with something I can use.
 
-1. **`trace export` and `trace serve`** together. Done when the box exports last night's sessions
+1. **`trace export` and `trace serve`** together (built 2026-11-10; see "Step 1: what was verified"). Done when the box exports last night's sessions
    to `evals/days/...` and the page on the desktop shows them one at a time with Previous and Next,
    gateway decisions matched or flagged.
 2. **Open coding and modes.** The page's annotations and Export, `evals/modes.yaml`,
@@ -363,3 +366,34 @@ proxy for per-call traces, an annotation UI better than the CLI, the monthly abl
   it is wrong often.
 - **Hermes schema drift.** `state.db` belongs to Hermes. The trace reader should fail loudly on a
   missing column, and a Hermes upgrade should re-run `trace show` on a known session.
+
+## Step 1: what was verified
+
+Built 2026-11-10 in `internal/trace` and `cmd/chhayactl/trace.go`; the page is `internal/trace/web/index.html`,
+embedded in the binary.
+
+- **The join, on real data.** Exporting the desktop's 13 sessions gave 12 traces (one session had no
+  messages). All 30 gateway tool messages matched an audit entry by tool name and time, and no
+  gateway call was left unclaimed. Hermes wraps gateway calls in a `tool_call` envelope and its tool
+  results in `<untrusted_tool_result>` tags; the reader unwraps the first and keeps the second as is.
+- **Counters agree with what we already knew.** The 2026-11-07 session where it asked for an address
+  shows 5 questions and 0 memory calls before the first; the exercise-routine session that looked
+  first shows no question.
+- **The page, rendered in a browser** (headless Firefox against real traces): conversation, collapsed
+  tool calls with gateway decisions, the marker on the counted question, the verdict box.
+- **Guards, each mutation-checked** (the test fails when the guard is removed): foreign `Host` refused
+  (DNS rebinding), writes need the `X-Chhaya` header (cross-site posts), day and id validated before
+  they reach a path or the aws CLI, the body cannot override the trace id, listener is 127.0.0.1 only.
+- **Not verified:** the S3 path end to end. The tests use a fake `aws`; nothing has uploaded to the real
+  bucket yet, and the box has not run the export. The first real run should be on the box with
+  `-s3`, then `serve -s3` on the desktop.
+
+## Known limits of step 1
+
+- **The question heuristic is crude**, as predicted: a closing offer ("Want me to walk through
+  the setup?") counts as a question. The page marks which message was counted so a wrong call is
+  visible; it is not corrected in code.
+- **Cost shows $0.000** for sessions where Hermes did not record one; treat it as unknown.
+- **Cron sessions** appear as traces too (source `cron`), with long ids; they are in the list.
+- **`evals/` still has no lifecycle rule**; add it before the first Export (see open questions).
+- **The mode field is free text** until `modes.yaml` exists (step 2).

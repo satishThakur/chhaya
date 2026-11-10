@@ -71,8 +71,10 @@ if [ ! -d "$REPO_DIR/.git" ]; then
 fi
 
 # --- cron entry (only when asked: on a fresh box there is no data to back up yet) -
-if [ "$want_cron" -eq 1 ] && ! crontab -u "$BOX_USER" -l 2>/dev/null | grep -q 'dev.sh backup'; then
-  missing+=("nightly backup crontab for $BOX_USER")
+# Both jobs must be present, so a box set up before the trace export existed gets it too.
+cur="$(crontab -u "$BOX_USER" -l 2>/dev/null || true)"
+if [ "$want_cron" -eq 1 ] && { ! grep -q 'dev.sh backup' <<<"$cur" || ! grep -q 'trace export' <<<"$cur"; }; then
+  missing+=("crontab for $BOX_USER (nightly backup and trace export)")
   [ "$mode" = install ] && crontab -u "$BOX_USER" "$REPO_DIR/deploy/crontab.box"
 fi
 

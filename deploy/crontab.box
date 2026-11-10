@@ -1,5 +1,5 @@
 # Install on the box, as the ubuntu user:  crontab deploy/crontab.box
-# (prints nothing on success; output of each run goes to ~/.chhaya/backups/backup.log)
+# (prints nothing on success; output goes to ~/.chhaya/backups/backup.log and export.log)
 #
 # Nightly backup at 02:00 IST = 20:30 UTC (the box clock is UTC). It stops the stack for
 # a few seconds, takes a verified tarball, restarts, then uploads to S3. S3 keeps 30 days
@@ -7,3 +7,10 @@
 PATH=/snap/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 CHHAYA_BACKUP_S3=s3://chhaya-backup-803874683069-ap-south-1/backups
 30 20 * * * cd /home/ubuntu/chhaya && scripts/dev.sh backup >> /home/ubuntu/.chhaya/backups/backup.log 2>&1
+
+# Trace export at 02:45 IST = 20:45 UTC, after the backup has finished and restarted the
+# stack. Builds one trace per recent session from state.db and the audit log and uploads
+# them to s3://BUCKET/evals/days/. Separate from the backup on purpose: neither can fail
+# the other. docs/observability-and-evals.md. If this line is new on a running box, install
+# it with `crontab deploy/crontab.box` (box-setup.sh --cron does too).
+45 20 * * * cd /home/ubuntu/chhaya && go build -o bin/chhayactl ./cmd/chhayactl && bin/chhayactl trace export -s3 s3://chhaya-backup-803874683069-ap-south-1/evals >> /home/ubuntu/.chhaya/backups/export.log 2>&1
