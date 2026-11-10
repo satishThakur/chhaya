@@ -32,40 +32,53 @@ before now fails.
 6. **A baseline before a fix.** Measure the current build on the cases before changing anything.
    Everything is in git, so an older build can be measured too.
 7. **Real data stays private.** Traces and cases built from them contain my life. They never enter
-   this repo. The repo holds the tooling and synthetic cases built from `memory.example/`.
+   this repo. They live in the private bucket under `evals/`. The repo holds the tooling and
+   synthetic cases built from `memory.example/`.
 
-## The loop
+## The flow, and where everything lives
+
+S3 is the system of record for traces and annotations. The desktop only caches.
 
 ```
-  production (box)                    analysis (desktop)                      change
-  ────────────────                    ──────────────────                      ──────
-  Telegram tasks  ──nightly backup──▶ restored copy of prod data
-                                        │
-                                        ▼
-                                      chhayactl trace list / show     (read traces)
-                                        │
-                                        ▼
-                                      notes: pass/fail + first failure (open coding)
-                                        │
-                                        ▼
-                                      failure modes + counts           (axial coding)
-                                        │
-                     ┌──────────────────┴───────────────────┐
-                     ▼                                      ▼
-               obvious gap: fix it                 persistent: write cases
-                                                            │
-                                                            ▼
-                                              chhayactl eval run (baseline)
-                                                            │
-                                                     make the change
-                                                            │
-                                                            ▼
-                                              chhayactl eval run (candidate)
-                                              chhayactl eval compare  ──▶ ship or not
-                                                            │
-                                                            ▼
-                                              production: failure-mode rate per week
+ box, nightly (cron 02:00 IST)
+   1. chhayactl backup            -> s3://BUCKET/backups/...        (exists)
+   2. chhayactl trace export      -> s3://BUCKET/evals/days/YYYY-MM-DD/trace-<id>.json
+                                     reads state.db + audit.jsonl, joins each session with
+                                     its gateway calls, writes one trace object per session
+
+ desktop
+   3. chhayactl trace serve       local page on 127.0.0.1; opens on the last day's traces,
+                                  fetches each trace from S3 as I move next/previous
+   4. annotate                    saved to ~/.chhaya/evals/ at once (autosave)
+   5. "Export" button             pushes open-code-<id>.json beside its trace in S3
+                                  (the page shows how many are unsynced)
 ```
+
+**Layout in the bucket** (the existing private, encrypted, versioned backup bucket):
+
+| Key | Holds | Written by |
+| --- | --- | --- |
+| `evals/days/YYYY-MM-DD/trace-<id>.json` | One session: messages, tool calls with results, matched gateway decision per call, unmatched gateway calls flagged, counters | `trace export` (box) |
+| `evals/days/YYYY-MM-DD/open-code-<id>.json` | My verdict on that trace: pass or fail, the note, `wanted`, `mode`, and the trace's message count when I annotated | the page's Export button |
+| `evals/modes.yaml` | The failure modes (axial coding) | the page |
+| `evals/cases/`, `evals/results/` | Eval cases and run results (later) | `eval run` |
+
+**Rules**
+
+- **Trace id** is Hermes' session id. The system prompt is stored as its hash, not in full.
+- **Day folder** is the session's start date in IST, so "yesterday" is my yesterday.
+- **Sessions span days.** A chat is one session until `/new`. The export re-writes a trace whenever
+  the session has new messages (a trace can always be regenerated from `state.db`, so overwriting
+  is safe). The annotation records the message count it saw; the page shows "new messages since
+  annotated" instead of silently trusting an old verdict.
+- **Annotations are overwritten** per trace (latest wins; one user). The bucket's rule that expires
+  old versions after 30 days may cover `evals/`; `evals/` needs its own lifecycle rule with no
+  expiry (see open questions).
+- **Access.** The box's instance role has `PutObject`, `GetObject`, `DeleteObject` on `bucket/*`
+  and `ListBucket` (policy checked 2026-11-10), which covers `evals/`. Containers cannot reach the
+  role: IMDS hop limit is 1. The desktop uses the operator's own credentials. Upload and download
+  shell out to the `aws` CLI, as backup does.
+- **A failed export never fails the backup, and the reverse.** Each logs its own result.
 
 Replay is the fast signal and decides whether to ship. The weekly rate in production is the true
 signal and says whether we were right. At about 150 tasks a month the weekly rate is slow and
@@ -104,35 +117,38 @@ is a model-provider setting, so this needs checking).
 
 ### `chhayactl trace`
 
-Read-only. Same constraints as backup: it shells out to the `sqlite3` CLI (`-readonly -json`),
-so no SQLite driver enters our Go code, and it never writes to the data it reads.
+Reads with the `sqlite3` CLI (`-readonly -json`), so no SQLite driver enters our Go code, and never
+writes to the data it reads.
 
 ```
-chhayactl trace list  [-home DIR] [-since 7d]        one line per session: id, start, source,
-                                                     title, turns, tool calls, memory calls,
-                                                     cost, label if any
-chhayactl trace show  [-home DIR] <session-id>       the conversation as readable text: user and
-                                                     assistant turns, each tool call with args and
-                                                     result, the matched gateway decision, existing
-                                                     notes
-chhayactl trace stats [-home DIR] [-since 7d]        per-session counters (below), as a table
+chhayactl trace export [-home DIR] [-s3 URI] [-since 2d]   build trace objects from state.db and
+                                                           audit.jsonl; upload to evals/days/...
+chhayactl trace serve  [-s3 URI] [-dir ~/.chhaya/evals] [-port 8787]
+                                                           the annotation page on 127.0.0.1
+chhayactl trace list | show <id> | stats                   the same traces as terminal text
+                                                           (fallback, and for scripts)
 ```
 
-**Where it runs.** On a restored copy of production on the desktop, not on the live box:
+`export` also runs on the desktop against a restored backup (`-home` points at it, `-s3` is
+omitted to write files only), which is how it is tested and how an old backup is analysed.
 
-```
-chhayactl backup pull -s3 s3://.../backups -dir ~/chhaya-analysis/in
-chhayactl backup restore -home ~/chhaya-analysis/prod-20261109 <archive>
-chhayactl trace list -home ~/chhaya-analysis/prod-20261109
-```
+### The page (`trace serve`)
 
-Restore never overwrites, so each pull is a dated copy. Reading prod on the box over SSM also
-works (it is read-only), but analysis on a copy can never disturb the live agent.
+A local web page, plain HTML and JS embedded in the `chhayactl` binary, bound to `127.0.0.1` only.
+It never faces the internet and has no login because nothing outside this machine can reach it.
 
-**Counters, per session** (`trace stats`, and later the weekly report):
-turns, tool calls, gateway calls by tool, memory calls before the first assistant question,
-questions asked by the assistant, tokens, cost, duration, proposals made and their approval
-result.
+- **One conversation at a time**, newest day first, with Previous and Next across traces and days.
+  A header shows the day, the position ("4 of 11"), source (telegram or cron), cost and whether it
+  is annotated.
+- **The conversation as text**: user and assistant turns; each tool call collapsed with arguments,
+  result and the gateway's decision; unmatched gateway calls shown in red.
+- **Annotation box**: Pass or Fail, the first thing that went wrong, what I wanted, and a mode
+  picker once modes exist. Every change saves to disk at once.
+- **Export button** pushes every unsynced `open-code-*.json` to S3 and shows "N unsynced" until it
+  does. If the desktop is lost before pushing, the count is the only warning, so it stays visible.
+- **Data interface**, three calls: list days and traces, get a trace, put an annotation. The local
+  server implements them over the `aws` CLI and the cache. A later phone version using presigned
+  URLs would implement the same three calls without a page rewrite.
 
 ## Part 2: Error analysis
 
@@ -148,10 +164,8 @@ For each trace, one record:
 | `wanted` | Optional: what I wanted instead. |
 | `mode` | Empty at first. Filled in during axial coding. |
 
-Stored as `~/.chhaya/evals/notes.jsonl`, one JSON object per line, appended by
-`chhayactl trace note <session-id> -fail "asked my address instead of checking memory"` (or
-`-pass`). A later note on the same session supersedes the earlier one; the file is never edited
-in place.
+Saved by the page as `open-code-<id>.json` (autosaved locally, pushed with Export), next to the
+trace it describes. One object per trace; the latest save wins.
 
 Read every trace while volume allows (it does: about 5 a day). Stop a pass when new traces stop
 producing new kinds of notes.
@@ -159,8 +173,8 @@ producing new kinds of notes.
 ### Axial coding: failure modes
 
 Group the failing notes into a small set of named modes, each with a one-line definition and an
-example session. Stored as `~/.chhaya/evals/modes.yaml`. `chhayactl trace note -mode` assigns
-one; `chhayactl trace modes` prints the count per mode and the sessions in each.
+example session. Stored as `evals/modes.yaml` in the bucket. The page assigns a mode to a trace;
+`chhayactl trace modes` prints the count per mode and the sessions in each.
 
 Example of what we expect from evidence we already have (`docs/learnings.md`, entry 1):
 
@@ -215,7 +229,7 @@ Single-turn first. The failures we have seen happen on the first turn of a task,
 cases need no conversation history. Multi-turn cases (prior turns, then the input) come later,
 using Hermes' `--resume` on a seeded session.
 
-Real cases live in `~/.chhaya/evals/cases/`. Synthetic cases built only on `memory.example/`
+Real cases live in the bucket under `evals/cases/`. Synthetic cases built only on `memory.example/`
 live in this repo under `evals/cases/` so the harness itself is tested in public.
 
 ### Checks
@@ -271,7 +285,7 @@ For each case and each run:
 
 Each result line records: case id, run number, pass or fail per check with reasons, the session
 id, the repo commit, the Hermes image digest, the model, tokens and cost. Results go to
-`~/.chhaya/evals/results/<timestamp>-<label>.jsonl`.
+`evals/results/<timestamp>-<label>.jsonl` in the bucket.
 
 **Deciding.** Each case reports k of n runs passed. With 5 runs per case this is coarse, so the
 rule is simple and conservative:
@@ -310,10 +324,12 @@ the intervals separate.
 
 Each step ends with something I can use.
 
-1. **`chhayactl trace list | show | stats`** over a restored copy of prod. Done when I can read
-   every session from the last backup as text, with gateway decisions matched or flagged.
-2. **Notes and modes** (`trace note`, `trace modes`, files in `~/.chhaya/evals`). Done when I have
-   coded every existing session and have counts per mode.
+1. **`trace export` and `trace serve`** together. Done when the box exports last night's sessions
+   to `evals/days/...` and the page on the desktop shows them one at a time with Previous and Next,
+   gateway decisions matched or flagged.
+2. **Open coding and modes.** The page's annotations and Export, `evals/modes.yaml`,
+   `trace modes`, and the `evals/` lifecycle rule. Done when I have coded every existing session
+   and have counts per mode.
 3. **Spike: one non-interactive Hermes turn** against an eval gateway on the desktop. Done when a
    single `hermes chat -q --oneshot` produces a session in a temporary `state.db` with a gateway
    tool call in it. This settles the main unknown before the runner is built.
@@ -336,9 +352,13 @@ proxy for per-call traces, an annotation UI better than the CLI, the monthly abl
   (`hermes chat --help`, checked 2026-11-09). Not verified: that a one-shot run loads
   `mcp_servers.chhaya`, writes its session to `state.db`, and that `--format stream-json` carries
   tool calls. Step 3 verifies it.
-- **Backups of `~/.chhaya/evals`.** Notes and real cases are worth keeping. `chhayactl backup`
-  covers only `hermes/` and `gateway/` and refuses anything else on restore. Either extend it to
-  `evals/` (with tests) or make `evals/` its own private git repo. Decide at step 2.
+- **Lifecycle for `evals/`.** The bucket has an `expire-old-versions` rule (30 days, noncurrent)
+  that may be bucket-wide, and `expire-nightly-backups` on `backups/`. Check the first rule's
+  filter; `evals/` needs its own rule with no expiry so an overwritten annotation stays
+  recoverable. Terraform change, before the first Export.
+- **Delete permission.** The box role can delete any object in the bucket. Versioning limits the
+  damage, and containers cannot reach the role. Narrowing `DeleteObject` to `evals/*` is the
+  owner's IAM call.
 - **The question heuristic.** "Contains a question mark" will misfire. Replace it if the notes show
   it is wrong often.
 - **Hermes schema drift.** `state.db` belongs to Hermes. The trace reader should fail loudly on a

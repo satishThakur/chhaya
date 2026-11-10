@@ -729,3 +729,13 @@ second user or inbound access, or the bot naming convention stops being enforcea
 **Why.** A taxonomy written before any data names the failures we imagined, not the ones we have; the first real failure (the agent "forgetting", `docs/learnings.md`) was two modes, neither of which the list separated. Generic judged scores were not calibrated against anything. Langfuse is a four-service stack for one user and about 150 traces a month; a CLI over `state.db` answers the same questions now.
 
 **Reopen if:** labeling in the CLI is slow enough that traces go unread, trace volume outgrows reading every one, or the audit-to-session join by time turns out ambiguous.
+
+## 2026-11-10: S3 is the system of record for traces and annotations; the page is local
+
+**Decision.** `chhayactl trace export` runs on the box after the nightly backup and writes one trace object per session to `s3://<bucket>/evals/days/YYYY-MM-DD/trace-<id>.json`. `chhayactl trace serve` is a local page on `127.0.0.1` that reads those traces from S3, autosaves annotations locally and pushes `open-code-<id>.json` beside each trace with an Export button. Details in `docs/observability-and-evals.md`.
+
+**Why S3 and not a hosted page.** Traces hold family, health and location, and the bucket is private. S3 website hosting needs a public bucket or CloudFront with its own login, and a browser cannot write to a private bucket without credentials. A local page adds no way in, and S3 still gives durability, versioning and one place to restore from.
+
+**Consequences.** Labeling is desktop-only for now; a presigned-URL variant for a phone can implement the same three-call data interface. `evals/` needs its own lifecycle rule (no expiry). The box role's `DeleteObject` on `bucket/*` is broader than needed and is the owner's to narrow.
+
+**Reopen if:** labeling on a phone matters enough to justify presigned URLs, or the unsynced-annotation window loses a note.
