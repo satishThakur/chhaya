@@ -61,6 +61,13 @@
   textarea { min-height: 70px; resize: vertical; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .stale { color: var(--warn); font-size: 13px; margin-top: 8px; }
+  .llm { border: 1px dashed var(--accent); border-radius: 8px; margin: 8px 0 0; padding: 4px 10px; font-size: 13px; background: var(--panel); }
+  .llm > summary { color: var(--accent); }
+  .lm { border-left: 3px solid var(--line); padding: 3px 8px; margin: 6px 0; font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .lm.system { border-color: var(--warn); } .lm.user { border-color: var(--accent); } .lm.assistant { border-color: var(--muted); }
+  .lm .role { margin: 0; }
+  .note { color: var(--muted); font-size: 13px; border: 1px dashed var(--line); border-radius: 8px; padding: 6px 12px; margin: 10px 0; }
+  .tool-def { margin: 4px 0; } .tool-def b { font: 12.5px ui-monospace, Menlo, monospace; }
   #empty { padding: 40px 0; text-align: center; color: var(--muted); }
 </style>
 </head>
@@ -204,6 +211,83 @@ function entryBox(title, list, cls) {
   return box;
 }
 
+
+// ---- what the model was sent (from Hermes' request dumps; trace.llm) ---------------------
+function wireText(m) {
+  const c = m.content;
+  if (c === null || c === undefined) return "";
+  if (typeof c === "string") return c;
+  if (Array.isArray(c)) return c.map((b) => (b && b.text !== undefined ? b.text : JSON.stringify(b))).join("");
+  return JSON.stringify(c);
+}
+function wireMsgNode(m) {
+  const n = el("div", "lm " + m.role);
+  n.append(el("div", "role", m.role + (m.name ? " · " + m.name : "") + (m.tool_call_id ? " · " + m.tool_call_id : "")));
+  const txt = wireText(m);
+  if (txt) n.append(document.createTextNode(txt));
+  if (m.tool_calls) n.append(el("div", "call", pretty(m.tool_calls)));
+  return n;
+}
+function contextUpTo(llm, num) {
+  let out = [];
+  for (const c of llm.calls) { if (c.reset) out = []; out = out.concat(c.new || []); if (c.n === num) break; }
+  return out;
+}
+function callPanel(llm, c) {
+  const d = el("details", "llm");
+  const isFirst = c === llm.calls[0];
+  const bits = ["Sent to LLM · call " + c.n, c.total + " messages in context", isFirst ? "first request recorded" : "+" + (c.new || []).length + " new"];
+  if (c.model) bits.push(c.model); if (c.reasoning_effort) bits.push("effort " + c.reasoning_effort);
+  if (c.attempts > 1) bits.push("sent " + c.attempts + "×");
+  if (c.reset) bits.push("history was rewritten here");
+  const first = llm.calls[0];
+  if (c !== first && (c.system !== first.system)) bits.push("system prompt changed");
+  if (c !== first && (c.tools !== first.tools)) bits.push("tools changed");
+  d.append(el("summary", null, bits.join(" · ")));
+  d.append(el("div", "muted", isFirst
+    ? "The first request recorded for this session. It carries the whole history so far, including anything from before request dumps were switched on:"
+    : "Messages added since the previous call, exactly as sent:"));
+  (c.new || []).forEach((m) => d.append(wireMsgNode(m)));
+  const all = el("details"); all.append(el("summary", null, "everything in this request (system prompt, tools, all " + c.total + " messages)"));
+  let filled = false;
+  all.addEventListener("toggle", () => {
+    if (!all.open || filled) return; filled = true;
+    const sys = llm.systems[c.system]; if (sys) all.append(wireMsgNode(sys));
+    all.append(toolsNode(llm.tool_sets[c.tools]));
+    contextUpTo(llm, c.n).forEach((m) => all.append(wireMsgNode(m)));
+  });
+  d.append(all); return d;
+}
+function toolsNode(tools) {
+  const d = el("details"); const list = Array.isArray(tools) ? tools : [];
+  d.append(el("summary", null, list.length + " tool definitions"));
+  list.forEach((t) => {
+    const f = t.function || t; const row = el("div", "tool-def");
+    row.append(el("b", null, f.name || "?"), document.createTextNode("  " + (f.description || "")));
+    const det = el("details"); det.append(el("summary", null, "schema")); det.append(el("pre", null, pretty(f.parameters || f.input_schema || f)));
+    row.append(det); d.append(row);
+  });
+  return d;
+}
+function llmHeader(t) {
+  const l = t.llm;
+  if (!l || !(l.calls || []).length) {
+    let why = "No request dumps for this session, so the system prompt, the tool definitions and what was injected into each request are not shown. Hermes writes them only when run with HERMES_DUMP_REQUESTS=1.";
+    if (l && l.other_dumps) why += " (" + l.other_dumps + " error dump(s) exist but are not shown.)";
+    return el("div", "note", why);
+  }
+  const box = el("details", "box");
+  const sysKeys = Object.keys(l.systems || {});
+  box.append(el("summary", null, "What the model was given · " + l.calls.length + " call(s) · system prompt" + (sysKeys.length > 1 ? "s (" + sysKeys.length + " versions)" : "") + " and tools"));
+  sysKeys.forEach((k) => {
+    const m = l.systems[k]; const det = el("details"); det.append(el("summary", null, "system prompt " + k + " (" + wireText(m).length + " chars)"));
+    det.append(el("pre", null, wireText(m))); box.append(det);
+  });
+  Object.keys(l.tool_sets || {}).forEach((k) => box.append(toolsNode(l.tool_sets[k])));
+  (l.problems || []).forEach((p) => box.append(el("div", "stale", "could not read a dump: " + p)));
+  return box;
+}
+
 function render() {
   const t = trace, c = t.counters || {};
   $("pos").textContent = (cur + 1) + " of " + refs.length + " · " + t.day;
@@ -218,6 +302,9 @@ function render() {
   if (t.parent_id) kv("continues", t.parent_id);
 
   const convo = $("convo"); convo.textContent = "";
+  convo.append(llmHeader(t));
+  const byReply = {};
+  ((t.llm && t.llm.calls) || []).forEach((cl) => { if (cl.reply_message_id) byReply[cl.reply_message_id] = cl; });
   (t.messages || []).forEach((m) => {
     const n = el("div", "m " + m.role);
     const head = el("div", "role", m.role + (m.tool_name ? " · " + m.tool_name : "") + " · " + new Date(m.time).toLocaleTimeString("en-GB", { timeZone: "Asia/Kolkata" }));
@@ -232,8 +319,14 @@ function render() {
       if (m.content) n.append(document.createTextNode(m.content));
       (m.calls || []).forEach((cl) => n.append(callNode(cl)));
     }
+    if (byReply[m.id]) convo.append(callPanel(t.llm, byReply[m.id]));
     convo.append(n);
   });
+  const loose = ((t.llm && t.llm.calls) || []).filter((cl) => !cl.reply_message_id);
+  if (loose.length) {
+    const box = el("div", "box"); box.append(el("h3", null, "Model calls not linked to a message (" + loose.length + ")"));
+    loose.forEach((cl) => box.append(callPanel(t.llm, cl))); convo.append(box);
+  }
   $("unmatched").textContent = ""; $("events").textContent = "";
   if ((t.unmatched || []).length) $("unmatched").append(entryBox("Gateway calls no message claimed (matching is by time; check these)", t.unmatched, "red"));
   if ((t.events || []).length) $("events").append(entryBox("Approver activity in this window", t.events, ""));

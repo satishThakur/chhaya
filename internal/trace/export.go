@@ -62,6 +62,7 @@ func Export(o ExportOptions) (ExportResult, error) {
 		t.Unmatched, t.Events = m.Residue(t.Started, t.LastMessage)
 		t.Counters = Count(t.Messages)
 		t.MessageCount = len(t.Messages)
+		t.LLM = ReadLLM(filepath.Join(o.Home, "hermes", "sessions"), t)
 		t.ExportedAt = o.Now.UTC()
 		if len(t.Unmatched) > 0 {
 			res.Flagged++

@@ -749,3 +749,13 @@ second user or inbound access, or the bot naming convention stops being enforcea
 **Consequences.** A new top-level prefix gets no expiry until it is added to `expiring_prefixes`; it fails safe, but it can grow. The Terraform state file under `terraform/` keeps the same 30-day rule it had.
 
 **Reopen if:** `evals/` grows large enough to cost money (traces are the part that would), at which point trace objects could move under their own prefix with an expiry, leaving annotations alone.
+
+## 2026-11-11: traces record what the model was sent, from Hermes' own request dumps
+
+**Decision.** `trace export` reads `sessions/request_dump_*.json` and adds the system prompt, tool schemas and per-call messages to the trace (`trace.llm`, schema 2). Hermes writes those dumps on every call when `HERMES_DUMP_REQUESTS=1`. We set it in the per-machine `deploy/.env.hermes` on the desktop; the box stays off until it is turned on deliberately.
+
+**Why.** The first annotated traces showed the conversation but not the system prompt, the tool list or what each request carried, and error analysis needs what the model saw. `state.db` does not store it. Hermes already has the capture, so a proxy (LiteLLM) or a tracing service (Langfuse) would add a component, and a place memory text flows through, for nothing we lack.
+
+**Consequences.** Trace objects grow (the prompt and tools once per trace, plus each call's new messages). Memory text from the system prompt now lives in traces in the private bucket. Only sessions run with the flag have the data.
+
+**Reopen if:** the dump format changes on a Hermes upgrade (the reader names the keys it uses and reports unreadable files in `problems`), or we need the data for sessions the dumps did not cover.
