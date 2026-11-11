@@ -59,6 +59,7 @@ type messageRow struct {
 	ToolCallID *string `json:"tool_call_id"`
 	ToolCalls  *string `json:"tool_calls"`
 	ToolName   *string `json:"tool_name"`
+	Finish     *string `json:"finish_reason"`
 	Timestamp  float64 `json:"timestamp"`
 	Active     *int    `json:"active"`
 	Compacted  *int    `json:"compacted"`
@@ -134,7 +135,7 @@ func ReadSessions(dbPath string, since time.Time, q Query) ([]*Trace, error) {
 			t.CostUSD = *r.EstimatedCost
 		}
 		mb, err := q(dbPath, fmt.Sprintf(`SELECT id, session_id, role, content, tool_call_id, tool_calls,
-			tool_name, timestamp, active, compacted FROM messages WHERE session_id = '%s' ORDER BY id`, r.ID))
+			tool_name, finish_reason, timestamp, active, compacted FROM messages WHERE session_id = '%s' ORDER BY id`, r.ID))
 		if err != nil {
 			return nil, err
 		}
@@ -145,7 +146,7 @@ func ReadSessions(dbPath string, since time.Time, q Query) ([]*Trace, error) {
 		for _, m := range mrows {
 			msg := Message{
 				ID: m.ID, Role: m.Role, Time: epoch(m.Timestamp), Content: str(m.Content),
-				ToolName: str(m.ToolName), ToolCallID: str(m.ToolCallID),
+				ToolName: str(m.ToolName), ToolCallID: str(m.ToolCallID), FinishReason: str(m.Finish),
 				Inactive: (m.Active != nil && *m.Active == 0) || (m.Compacted != nil && *m.Compacted != 0),
 			}
 			if m.ToolCalls != nil {

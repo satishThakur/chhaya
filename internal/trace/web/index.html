@@ -38,6 +38,7 @@
   .m { border-radius: 8px; padding: 9px 12px; margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
   .m.user { background: var(--user); margin-right: 14%; }
   .m.assistant { background: var(--assistant); margin-left: 6%; }
+  .m.reply { border-left: 4px solid var(--accent); }
   .m.tool { background: var(--tool); border: 1px solid var(--line); font-size: 13px; margin-left: 6%; }
   .role { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 2px; }
   .call { font: 12.5px ui-monospace, Menlo, monospace; margin-top: 6px; padding: 5px 8px; border-left: 3px solid var(--accent);
@@ -307,7 +308,11 @@ function render() {
   ((t.llm && t.llm.calls) || []).forEach((cl) => { if (cl.reply_message_id) byReply[cl.reply_message_id] = cl; });
   (t.messages || []).forEach((m) => {
     const n = el("div", "m " + m.role);
-    const head = el("div", "role", m.role + (m.tool_name ? " · " + m.tool_name : "") + " · " + new Date(m.time).toLocaleTimeString("en-GB", { timeZone: "Asia/Kolkata" }));
+    const reply = byReply[m.id];
+    const label = reply ? "LLM reply · call " + reply.n : m.role;
+    const head = el("div", "role", label + (m.tool_name ? " · " + m.tool_name : "") + " · " + new Date(m.time).toLocaleTimeString("en-GB", { timeZone: "Asia/Kolkata" }));
+    if (m.finish_reason) head.append(el("span", "badge", "finish: " + m.finish_reason));
+    if (reply) n.classList.add("reply");
     if (m.id === c.first_question_message_id) head.append(el("span", "badge q", "counted as first question"));
     if (m.inactive) head.append(el("span", "badge", "inactive in Hermes history"));
     n.append(head);
@@ -317,6 +322,7 @@ function render() {
       det.append(el("pre", null, m.content || "")); n.append(det);
     } else {
       if (m.content) n.append(document.createTextNode(m.content));
+      else if ((m.calls || []).length) n.append(el("div", "muted", "No text. The model asked for " + (m.calls.length === 1 ? "this tool call:" : m.calls.length + " tool calls:")));
       (m.calls || []).forEach((cl) => n.append(callNode(cl)));
     }
     if (byReply[m.id]) convo.append(callPanel(t.llm, byReply[m.id]));

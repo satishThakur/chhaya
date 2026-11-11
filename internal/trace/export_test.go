@@ -43,7 +43,7 @@ CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, chat_id TEXT, 
   parent_session_id TEXT, started_at REAL NOT NULL, input_tokens INTEGER, output_tokens INTEGER,
   estimated_cost_usd REAL, actual_cost_usd REAL, system_prompt_hash TEXT);
 CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, role TEXT NOT NULL,
-  content TEXT, tool_call_id TEXT, tool_calls TEXT, tool_name TEXT, timestamp REAL NOT NULL,
+  content TEXT, tool_call_id TEXT, tool_calls TEXT, tool_name TEXT, finish_reason TEXT, timestamp REAL NOT NULL,
   active INTEGER DEFAULT 1, compacted INTEGER DEFAULT 0);
 `
 
@@ -55,7 +55,7 @@ INSERT INTO messages (session_id,role,content,timestamp) VALUES ('s_recent','use
 INSERT INTO messages (session_id,role,content,tool_calls,timestamp) VALUES ('s_recent','assistant','',
  '[{"id":"c1","function":{"name":"tool_call","arguments":"{\"calls\":[{\"name\":\"mcp__chhaya__memory_list\",\"arguments\":{}}]}"}}]',1794203283.9);
 INSERT INTO messages (session_id,role,content,tool_call_id,tool_name,timestamp) VALUES ('s_recent','tool','listing','c1','mcp__chhaya__memory_list',1794203283.95);
-INSERT INTO messages (session_id,role,content,timestamp) VALUES ('s_recent','assistant','One 10km run per week.',1794203286.8);
+INSERT INTO messages (session_id,role,content,finish_reason,timestamp) VALUES ('s_recent','assistant','One 10km run per week.','stop',1794203286.8);
 INSERT INTO messages (session_id,role,content,timestamp) VALUES ('s_old','user','ancient',1700000000.0);
 `
 
@@ -124,6 +124,9 @@ func TestExportBuildsTraceWithMatchedAndFlaggedGatewayCalls(t *testing.T) {
 	}
 	if res.Flagged != 1 {
 		t.Errorf("Flagged = %d", res.Flagged)
+	}
+	if tr.Messages[3].FinishReason != "stop" || tr.Messages[1].FinishReason != "" {
+		t.Errorf("finish_reason must be carried per message: %q / %q", tr.Messages[3].FinishReason, tr.Messages[1].FinishReason)
 	}
 	if tr.Counters.GatewayCalls["memory.list"] != 1 || tr.Counters.Questions != 0 {
 		t.Errorf("counters: %+v", tr.Counters)
