@@ -38,7 +38,14 @@
   .m { border-radius: 8px; padding: 9px 12px; margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
   .m.user { background: var(--user); margin-right: 14%; }
   .m.assistant { background: var(--assistant); margin-left: 6%; }
-  .m.reply { border-left: 4px solid var(--accent); }
+  .turn { border: 1px solid var(--accent); border-radius: 10px; margin: 14px 0; padding: 0 10px 8px; background: var(--panel); }
+  .turn-head { margin: 0 -10px; padding: 5px 12px; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+               color: var(--accent); border-bottom: 1px solid var(--line); border-radius: 10px 10px 0 0; }
+  .turn .llm { border: 0; border-left: 3px solid var(--line); border-radius: 0; margin: 8px 0; padding: 2px 10px; background: transparent; }
+  .turn .m { margin-left: 0; margin-right: 0; }
+  .m.reply { border-left: 4px solid var(--accent); background: var(--assistant); }
+  .m.reply .role { color: var(--accent); font-weight: 600; }
+  .ask { font-weight: 600; margin-bottom: 2px; }
   .m.tool { background: var(--tool); border: 1px solid var(--line); font-size: 13px; margin-left: 6%; }
   .role { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 2px; }
   .call { font: 12.5px ui-monospace, Menlo, monospace; margin-top: 6px; padding: 5px 8px; border-left: 3px solid var(--accent);
@@ -237,8 +244,7 @@ function contextUpTo(llm, num) {
 function callPanel(llm, c) {
   const d = el("details", "llm");
   const isFirst = c === llm.calls[0];
-  const bits = ["Sent to LLM · call " + c.n, c.total + " messages in context", isFirst ? "first request recorded" : "+" + (c.new || []).length + " new"];
-  if (c.model) bits.push(c.model); if (c.reasoning_effort) bits.push("effort " + c.reasoning_effort);
+  const bits = ["① Request sent to the model", c.total + " messages in context", isFirst ? "first request recorded" : "+" + (c.new || []).length + " new"];
   if (c.attempts > 1) bits.push("sent " + c.attempts + "×");
   if (c.reset) bits.push("history was rewritten here");
   const first = llm.calls[0];
@@ -306,11 +312,24 @@ function render() {
   convo.append(llmHeader(t));
   const byReply = {};
   ((t.llm && t.llm.calls) || []).forEach((cl) => { if (cl.reply_message_id) byReply[cl.reply_message_id] = cl; });
+  // One card per model call: the request, the reply it produced, and the tool results that
+  // reply triggered, so the three read as one step. Messages the page cannot tie to a call
+  // (no dump, or the user's own messages) stay outside any card.
+  let card = null;
   (t.messages || []).forEach((m) => {
-    const n = el("div", "m " + m.role);
     const reply = byReply[m.id];
-    const label = reply ? "LLM reply · call " + reply.n : m.role;
-    const head = el("div", "role", label + (m.tool_name ? " · " + m.tool_name : "") + " · " + new Date(m.time).toLocaleTimeString("en-GB", { timeZone: "Asia/Kolkata" }));
+    if (reply) {
+      card = el("div", "turn");
+      const th = el("div", "turn-head", "Model call " + reply.n + (reply.model ? " · " + reply.model : "") + (reply.reasoning_effort ? " · effort " + reply.reasoning_effort : ""));
+      card.append(th, callPanel(t.llm, reply));
+      convo.append(card);
+    } else if (m.role !== "tool") card = null;
+    const n = el("div", "m " + m.role);
+    const when = new Date(m.time).toLocaleTimeString("en-GB", { timeZone: "Asia/Kolkata" });
+    let label = m.role;
+    if (reply) label = "② Reply from the model";
+    else if (m.role === "tool" && card) label = "③ Result of the tool call above";
+    const head = el("div", "role", label + (m.tool_name ? " · " + m.tool_name : "") + " · " + when);
     if (m.finish_reason) head.append(el("span", "badge", "finish: " + m.finish_reason));
     if (reply) n.classList.add("reply");
     if (m.id === c.first_question_message_id) head.append(el("span", "badge q", "counted as first question"));
@@ -322,11 +341,10 @@ function render() {
       det.append(el("pre", null, m.content || "")); n.append(det);
     } else {
       if (m.content) n.append(document.createTextNode(m.content));
-      else if ((m.calls || []).length) n.append(el("div", "muted", "No text. The model asked for " + (m.calls.length === 1 ? "this tool call:" : m.calls.length + " tool calls:")));
+      else if ((m.calls || []).length) n.append(el("div", "ask", "No text. The model replied by asking for " + (m.calls.length === 1 ? "this tool call:" : m.calls.length + " tool calls:")));
       (m.calls || []).forEach((cl) => n.append(callNode(cl)));
     }
-    if (byReply[m.id]) convo.append(callPanel(t.llm, byReply[m.id]));
-    convo.append(n);
+    (card && (reply || m.role === "tool") ? card : convo).append(n);
   });
   const loose = ((t.llm && t.llm.calls) || []).filter((cl) => !cl.reply_message_id);
   if (loose.length) {
