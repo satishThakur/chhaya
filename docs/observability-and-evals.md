@@ -66,7 +66,8 @@ S3 is the system of record for traces and annotations. The desktop only caches.
 
 **Rules**
 
-- **Trace id** is Hermes' session id. The system prompt is stored as its hash, not in full.
+- **Trace id** is Hermes' session id. `state.db` keeps only a hash of the system prompt. The text, the tool
+  schemas and what each model call was sent come from Hermes' request dumps (see "What the model was sent").
 - **Day folder** is the session's start date in IST, so "yesterday" is my yesterday.
 - **Sessions span days.** A chat is one session until `/new`. The export re-writes a trace whenever
   the session has new messages (a trace can always be regenerated from `state.db`, so overwriting
@@ -388,6 +389,34 @@ embedded in the binary.
 - **Not verified:** the S3 path end to end. The tests use a fake `aws`; nothing has uploaded to the real
   bucket yet, and the box has not run the export. The first real run should be on the box with
   `-s3`, then `serve -s3` on the desktop.
+
+## What the model was sent (trace schema 2)
+
+`state.db` holds the conversation, not the requests. With `HERMES_DUMP_REQUESTS=1` Hermes writes
+`sessions/request_dump_<session>_<time>.json` before every model call (reason `preflight`): the full
+system prompt, the tool schemas and every message. `ReadLLM` (`internal/trace/calls.go`) rebuilds
+`trace.llm` from them:
+
+- system prompts and tool sets are stored once, keyed by hash; each call stores only the messages
+  added since the previous call (checked as a true prefix; if history was rewritten the call is marked
+  `reset` and keeps all of its messages);
+- a retry of the identical request is folded into one call (`attempts`);
+- each call is linked to the assistant message it produced (`reply_message_id`) by tool-call ids and
+  text, each message claimed once. The last call has no later request to confirm it, so it links only to
+  the final assistant message. A call that cannot be matched stays unlinked and is listed at the bottom;
+- error dumps are counted (`other_dumps`) and not shown; unreadable files are listed in `problems`.
+
+The page shows a "What the model was given" box (system prompt, tools) and, above each assistant
+message, a "Sent to LLM" panel with the messages added and an expander for the whole request.
+
+- **Where the flag is set:** `HERMES_DUMP_REQUESTS=1` in `deploy/.env.hermes` (per machine, git-ignored).
+  On for the desktop (dev). **Off on the box** until it is decided deliberately.
+- **Privacy:** the system prompt contains Personal memory. Hermes redacts secrets in dumps before writing.
+  The dumps sit in plaintext under `~/.chhaya/hermes/sessions/` and, through the trace, in the private
+  bucket. Same trust level as the messages already in a trace.
+- **Limits:** only sessions run with the flag on have calls. For a session resumed from before the flag
+  the first recorded call carries all earlier history. Dump timestamps have no zone (the container's local
+  time) and are shown as written. Dumps are pruned with their session by Hermes.
 
 ## Known limits of step 1
 

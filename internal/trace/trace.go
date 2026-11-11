@@ -13,7 +13,8 @@ import (
 	"time"
 )
 
-const Schema = 1
+// Schema 2 adds LLM: the requests Hermes sent, when its request dumps were available.
+const Schema = 2
 
 // IST is the zone a trace's day folder is named in: my day, not UTC's.
 var IST = time.FixedZone("IST", 5*3600+30*60)
@@ -34,16 +35,18 @@ type Trace struct {
 	InputTokens      int64     `json:"input_tokens"`
 	OutputTokens     int64     `json:"output_tokens"`
 	CostUSD          float64   `json:"cost_usd"`
-	SystemPromptHash string    `json:"system_prompt_hash,omitempty"` // the prompt itself is not exported
+	SystemPromptHash string    `json:"system_prompt_hash,omitempty"` // state.db keeps only the hash; the text comes from LLM
 	MessageCount     int       `json:"message_count"`
 	Messages         []Message `json:"messages"`
 	// Unmatched are gateway calls by Hermes inside this session's time window that no
 	// tool message claimed. Shown, never guessed away.
 	Unmatched []GatewayEntry `json:"unmatched,omitempty"`
 	// Events are gateway entries by other actors (the approver) inside the window.
-	Events     []GatewayEntry `json:"events,omitempty"`
-	Counters   Counters       `json:"counters"`
-	ExportedAt time.Time      `json:"exported_at"`
+	Events   []GatewayEntry `json:"events,omitempty"`
+	Counters Counters       `json:"counters"`
+	// LLM is what the model was sent on each call. Nil when Hermes was not dumping requests.
+	LLM        *LLM      `json:"llm,omitempty"`
+	ExportedAt time.Time `json:"exported_at"`
 }
 
 type Message struct {
