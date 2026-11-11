@@ -18,3 +18,11 @@ during it, and whether Hermes' own cron jobs pause.
 Backup and restore are Go now (`chhayactl backup`, decided 2026-11-09). Still open: triggering it
 remotely (an EventBridge rule calling SSM Run Command, so the box needs no cron) and making
 it a quiesce request to maintenance mode instead of stopping the containers.
+
+## Self-testing memory (asked 2026-11-11)
+
+Every fact carries a probe, a weak-model retriever proves the memory is navigable, and two
+background agents (extractor, reorganizer) propose improvements through the approval flow. Full
+request, how it fits the gateway, staging and open questions: `docs/memory-selftest.md`. The first
+stages (fact ids and probes, the eval runner) are measurement and can follow the eval runner; the
+agents are features and wait for the freeze to lift.
