@@ -407,7 +407,10 @@ system prompt, the tool schemas and every message. `ReadLLM` (`internal/trace/ca
 - error dumps are counted (`other_dumps`) and not shown; unreadable files are listed in `problems`.
 
 The page shows a "What the model was given" box (system prompt, tools) and, above each assistant
-message, a "Sent to LLM" panel with the messages added and an expander for the whole request.
+message, a "Sent to LLM" panel with the messages added and an expander for the whole request. The reply
+bubble is labelled "LLM reply · call N" with Hermes' `finish_reason` (`tool_calls` or `stop`); a reply with no text
+says that the model asked for a tool call. The raw API response is not recorded: no per-call token usage and
+no reasoning (Hermes stores none for this model).
 
 - **Where the flag is set:** `HERMES_DUMP_REQUESTS=1` in `deploy/.env.hermes` (per machine, git-ignored).
   On for the desktop (dev). **Off on the box** until it is decided deliberately.

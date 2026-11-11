@@ -50,15 +50,18 @@ type Trace struct {
 }
 
 type Message struct {
-	ID         int64         `json:"id"`
-	Role       string        `json:"role"`
-	Time       time.Time     `json:"time"`
-	Content    string        `json:"content,omitempty"`
-	Calls      []Call        `json:"calls,omitempty"`
-	ToolName   string        `json:"tool_name,omitempty"`
-	ToolCallID string        `json:"tool_call_id,omitempty"`
-	Inactive   bool          `json:"inactive,omitempty"` // compacted or replaced in Hermes' own history
-	Gateway    *GatewayEntry `json:"gateway,omitempty"`
+	ID         int64     `json:"id"`
+	Role       string    `json:"role"`
+	Time       time.Time `json:"time"`
+	Content    string    `json:"content,omitempty"`
+	Calls      []Call    `json:"calls,omitempty"`
+	ToolName   string    `json:"tool_name,omitempty"`
+	ToolCallID string    `json:"tool_call_id,omitempty"`
+	// FinishReason is why the model stopped, as Hermes recorded it on an assistant message
+	// ("tool_calls": it asked for a tool; "stop": it finished its answer).
+	FinishReason string        `json:"finish_reason,omitempty"`
+	Inactive     bool          `json:"inactive,omitempty"` // compacted or replaced in Hermes' own history
+	Gateway      *GatewayEntry `json:"gateway,omitempty"`
 }
 
 // Call is one tool call the assistant made. Hermes wraps most calls in a `tool_call`
