@@ -88,8 +88,14 @@ plugins:
 
 ## Steps (steps 1 to 4 verified on the desktop, 2026-11-12; the box is next)
 
-1. Install the pinned commit, disabled: `docker exec -it deploy-hermes-1 hermes plugins install
-   hermes-session-reset-policy --ref 0f2ea5ad995f1e4ba7c92c2dbd21afa868b8ae21 --no-enable`. It installs under
+1. Install the pinned commit. **Do this before the config enables it**, or use the second form.
+   Before the config names it: `docker exec deploy-hermes-1 hermes plugins install
+   hermes-session-reset-policy --ref 0f2ea5ad995f1e4ba7c92c2dbd21afa868b8ae21 --no-enable --no-deps`.
+   Once `hermes/config.yaml` enables it (any machine that has pulled this repo and run `make dev-up`),
+   Hermes counts it as active and refuses `--no-deps` ("cannot replace an active plugin"); use
+   `--yes-deps --no-enable` instead. The plugin has no runtime dependencies, so the consent is for nothing.
+   (Found on the box, 2026-11-12: the install printed that error and `hermes plugins list --no-bundled`
+   showed nothing.) It installs under
    the Hermes data directory (`~/.chhaya/hermes/plugins`), which survives container recreation and is in the
    backup. Hermes scans the plugin and asks for consent to its declared hook.
 2. Add the config above to `hermes/config.yaml`; `make dev-up`, then **`docker restart deploy-hermes-1`**.
