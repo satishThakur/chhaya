@@ -420,6 +420,44 @@ no reasoning (Hermes stores none for this model).
   the first recorded call carries all earlier history. Dump timestamps have no zone (the container's local
   time) and are shown as written. Dumps are pruned with their session by Hermes.
 
+## Code checks (`chhayactl trace check`)
+
+Deterministic checks over exported traces: plain Go over the JSON, no model, no Hermes run, the same
+traces always give the same answer. `internal/check`. Run it with `-s3` to check the bucket's copy
+(a temporary directory is used so a stale local file is never read instead), `-day` for one IST day,
+`-json` for a machine-readable report, `-v` to include `info` lines. It exits non-zero on any `fail`
+finding **and** on any trace it could not read: a check that did not run is not a pass.
+
+| Check | Level | Runs on | Catches |
+| --- | --- | --- | --- |
+| `integrity.unmatched` | fail | all | A gateway call not tied to a tool message (the trace is wrong) |
+| `integrity.orphan_call` | fail | all | A tool call with no result |
+| `integrity.llm_link` | flag | all | A recorded model call with no reply, or an unreadable request dump |
+| `secrets.in_trace` | fail | all | Key- or token-shaped strings anywhere in the trace; reports kind and place, never the value |
+| `reply.unanswered_human_message` | fail | telegram | A message you wrote got no text reply before your next one. Injected user-role messages (`[Cron delivery`, `[ASYNC DELEGATION`, `[System note`, `[SYSTEM`, `[IMPORTANT:`) are not you. The last message of a trace exported under 10 minutes ago is given the benefit of the doubt |
+| `tool.error` | flag | all | A tool result whose JSON carries a non-empty `error`, `status: error` or `success: false`. Parsed, not text-matched (`"error": null` is fine) |
+| `memory.miss` | flag | telegram | `memory.get` on a document that does not exist: a guessed path |
+| `loop.repeat_call` | fail | all | The same tool with the same arguments three or more times (key order ignored) |
+| `tools.surface` | info | all | Non-gateway tools used. Inventory only until there is an allow-list |
+| `ask.before_memory` | flag | telegram | A question asked with no memory call first. **Heuristic**: the question detector is crude and the question may not have needed memory |
+
+Levels: `fail` is an invariant, `flag` means look, `info` is inventory. The level belongs to the check
+and a check cannot raise its own findings.
+
+**Not decided yet:** the allow-list that would turn `tools.surface` from inventory into a verdict
+(which Hermes built-ins are acceptable in chat versus cron); thresholds for tool-call counts or
+latency (reported as numbers only until there is a baseline); where results are stored
+(`evals/results/` in S3, later).
+
+**Calibration comes next.** A check earns its place by agreeing with your annotations: one that never
+fires on traces you marked fail is a blind spot, one that fires on traces you marked pass is noise and
+is fixed or removed. That table needs annotated traces; none exist yet.
+
+**First run (2026-11-12, 19 traces, 13 Telegram and 6 cron):** 0 integrity failures, 0 secrets,
+3 failures (2 unanswered messages, both real; one `cronjob_manage` called four times with the same
+arguments), 8 traces with tool errors, 7 memory misses across 2 traces, `ask.before_memory` on 6 of 13
+Telegram traces. These are findings to read, not a score.
+
 ## Known limits of step 1
 
 - **The question heuristic is crude**, as predicted: a closing offer ("Want me to walk through

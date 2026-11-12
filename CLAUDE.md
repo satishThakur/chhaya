@@ -54,6 +54,7 @@ infra/terraform/    the EC2 box, bucket and snapshots (Mumbai)
 scripts/            dev.sh (incl. backup), box-setup.sh (EC2 box, idempotent), install-aws-tools.sh
 internal/backup/    verified backup and restore of ~/.chhaya (run via chhayactl backup)
 internal/trace/     per-session traces from state.db + the audit log; annotation page (chhayactl trace)
+internal/check/     deterministic checks over exported traces (chhayactl trace check)
 docs/               design.md, decisions.md, diagrams/
 ```
 

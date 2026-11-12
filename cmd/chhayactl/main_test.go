@@ -319,3 +319,110 @@ func TestParseSince(t *testing.T) {
 		}
 	}
 }
+
+// writeTrace puts a trace file where the store looks for it.
+func writeTrace(t *testing.T, dir, day, id string, body string) {
+	t.Helper()
+	p := filepath.Join(dir, "days", day, "trace-"+id+".json")
+	must(t, os.MkdirAll(filepath.Dir(p), 0o700))
+	must(t, os.WriteFile(p, []byte(body), 0o600))
+}
+
+const cleanTrace = `{"schema":2,"id":"%s","day":"%s","source":"telegram","started":"2026-11-11T10:00:00Z",
+ "messages":[{"id":1,"role":"user","content":"hi"},{"id":2,"role":"assistant","content":"hello"}],
+ "counters":{"memory_calls_before_first_question":-1}}`
+
+// the owner wrote, and the only thing after it is a tool call: no text reply
+const unansweredTrace = `{"schema":2,"id":"%s","day":"%s","source":"telegram","started":"2026-11-11T10:00:00Z",
+ "messages":[{"id":1,"role":"user","content":"hi"},{"id":2,"role":"assistant","calls":[{"id":"c","name":"x"}]},{"id":3,"role":"tool","tool_call_id":"c","content":"ok"}],
+ "counters":{"memory_calls_before_first_question":-1}}`
+
+func tf(body, id, day string) string {
+	s := strings.Replace(body, "%s", id, 1)
+	return strings.Replace(s, "%s", day, 1)
+}
+
+func TestTraceCheckReportsFindingsAndExitsNonZeroOnAFailure(t *testing.T) {
+	dir := t.TempDir()
+	writeTrace(t, dir, "2026-11-11", "good", tf(cleanTrace, "good", "2026-11-11"))
+	writeTrace(t, dir, "2026-11-11", "bad", tf(unansweredTrace, "bad", "2026-11-11"))
+	var out bytes.Buffer
+	err := runTrace([]string{"check", "-dir", dir}, &out, traceDeps{now: time.Now})
+	if err == nil || !strings.Contains(err.Error(), "1 failure") {
+		t.Fatalf("a fail finding must be an error, got %v", err)
+	}
+	for _, want := range []string{"checked 2 trace(s): 1 clean, 1 with findings", "reply.unanswered_human_message", "msg 1", "bad", "1 failure(s)"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "  good  ") {
+		t.Errorf("a clean trace must not be listed:\n%s", out.String())
+	}
+}
+
+func TestTraceCheckCleanRunSucceedsAndFiltersByDay(t *testing.T) {
+	dir := t.TempDir()
+	writeTrace(t, dir, "2026-11-10", "old", tf(unansweredTrace, "old", "2026-11-10"))
+	writeTrace(t, dir, "2026-11-11", "new", tf(cleanTrace, "new", "2026-11-11"))
+	var out bytes.Buffer
+	if err := runTrace([]string{"check", "-dir", dir, "-day", "2026-11-11"}, &out, traceDeps{now: time.Now}); err != nil {
+		t.Fatalf("the failing trace is on another day: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "checked 1 trace(s): 1 clean") {
+		t.Errorf("output = %s", out.String())
+	}
+	if err := runTrace([]string{"check", "-dir", dir, "-day", "yesterday"}, &out, traceDeps{now: time.Now}); err == nil {
+		t.Error("a bad -day must be an error")
+	}
+}
+
+func TestTraceCheckNeverPassesATraceItCouldNotRead(t *testing.T) {
+	dir := t.TempDir()
+	writeTrace(t, dir, "2026-11-11", "broken", "{not json")
+	var out bytes.Buffer
+	err := runTrace([]string{"check", "-dir", dir}, &out, traceDeps{now: time.Now})
+	if err == nil {
+		t.Fatalf("an unreadable trace is not a pass:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "could NOT be checked") || !strings.Contains(out.String(), "broken") {
+		t.Errorf("output = %s", out.String())
+	}
+}
+
+func TestTraceCheckWithS3ReadsTheBucketNotAStaleLocalCopy(t *testing.T) {
+	dir := t.TempDir()
+	// the local copy is the failing one; the bucket's newer copy is clean
+	writeTrace(t, dir, "2026-11-11", "s1", tf(unansweredTrace, "s1", "2026-11-11"))
+	d := traceDeps{now: time.Now, run: func(name string, args ...string) ([]byte, error) {
+		switch {
+		case len(args) >= 2 && args[0] == "s3" && args[1] == "ls":
+			return []byte("2026-11-11 10:00:00 100 evals/days/2026-11-11/trace-s1.json\n"), nil
+		case len(args) >= 2 && args[0] == "s3" && args[1] == "cp":
+			return []byte(tf(cleanTrace, "s1", "2026-11-11")), nil
+		}
+		return nil, errors.New("unexpected aws call")
+	}}
+	var out bytes.Buffer
+	if err := runTrace([]string{"check", "-dir", dir, "-s3", "s3://b/evals"}, &out, d); err != nil {
+		t.Fatalf("must have checked the bucket's clean copy: %v\n%s", err, out.String())
+	}
+}
+
+func TestTraceCheckJSONIsParseable(t *testing.T) {
+	dir := t.TempDir()
+	writeTrace(t, dir, "2026-11-11", "bad", tf(unansweredTrace, "bad", "2026-11-11"))
+	var out bytes.Buffer
+	_ = runTrace([]string{"check", "-dir", dir, "-json"}, &out, traceDeps{now: time.Now})
+	var rep struct {
+		Summary  []struct{ Check string }
+		Traces   []struct{ ID string }
+		Problems []string
+	}
+	if err := json.Unmarshal(out.Bytes(), &rep); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, out.String())
+	}
+	if len(rep.Traces) != 1 || len(rep.Summary) == 0 || rep.Problems == nil {
+		t.Errorf("report = %+v", rep)
+	}
+}

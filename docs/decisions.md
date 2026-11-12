@@ -759,3 +759,13 @@ second user or inbound access, or the bot naming convention stops being enforcea
 **Consequences.** Trace objects grow (the prompt and tools once per trace, plus each call's new messages). Memory text from the system prompt now lives in traces in the private bucket. Only sessions run with the flag have the data.
 
 **Reopen if:** the dump format changes on a Hermes upgrade (the reader names the keys it uses and reports unreadable files in `problems`), or we need the data for sessions the dumps did not cover.
+
+## 2026-11-12: code checks over traces have three levels, and run on the traces the bucket holds
+
+**Decision.** `chhayactl trace check` runs a fixed set of deterministic checks (`internal/check`) over exported traces. Each check has a level that belongs to the check: `fail` (an invariant; exits non-zero), `flag` (look at it) or `info` (inventory). Behavioural checks apply to Telegram sessions only, because cron digests behave differently. A trace that cannot be read is reported and makes the run fail. With `-s3` the bucket's copy is read, never a local one.
+
+**Why.** Error analysis says to start with checks you can state exactly, and to keep fuzzy signals out of the pass/fail path until your own labels say they matter. Writing the first set against the 19 existing traces showed where a naive version lies: a text match for `"error"` fires on `"error": null`, and injected `[Cron delivery]` messages stored as user messages look like unanswered questions. Both are handled by parsing and by a defined "human message".
+
+**Consequences.** `ask.before_memory` is a flag, not a failure, until annotations show it agrees with what the owner calls wrong. `tools.surface` is inventory until the owner sets an allow-list of Hermes built-in tools per source. Thresholds for tool-call counts and latency are not set until there is a baseline.
+
+**Reopen if:** a check disagrees with the owner's labels often enough to be noise (fix or drop it), or a failure mode appears in annotation that no check can state (that is the case for a calibrated judge).
