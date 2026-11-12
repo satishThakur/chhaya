@@ -295,3 +295,20 @@ func TestSummarizeAndFailures(t *testing.T) {
 		t.Errorf("failures = %d", Failures(rs))
 	}
 }
+
+func TestNotResetFlagsAConversationThatBeganWithYouAfterALongSilence(t *testing.T) {
+	later := tg(msg(5, "user", "hello again"), msg(6, "assistant", "hi"))
+	later.SessionID, later.Segment, later.Segments, later.GapBeforeMinutes = "s1", 2, 2, 240
+	got := wantN(t, "session.not_reset", later, 1)
+	if got[0].MessageID != 5 || !strings.Contains(got[0].Detail, "240 minutes") {
+		t.Errorf("%+v", got[0])
+	}
+
+	// the first conversation of a session has no silence before it
+	wantN(t, "session.not_reset", tg(msg(1, "user", "hi")), 0)
+
+	// a conversation that begins with a cron delivery is not the owner continuing a stale session
+	cron := tg(msg(5, "user", "[Cron delivery: Digest]\nbody"), msg(6, "assistant", "ok"))
+	cron.SessionID, cron.Segment, cron.Segments, cron.GapBeforeMinutes = "s1", 2, 2, 240
+	wantN(t, "session.not_reset", cron, 0)
+}

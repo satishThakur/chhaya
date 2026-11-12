@@ -66,13 +66,24 @@ S3 is the system of record for traces and annotations. The desktop only caches.
 
 **Rules**
 
-- **Trace id** is Hermes' session id. `state.db` keeps only a hash of the system prompt. The text, the tool
-  schemas and what each model call was sent come from Hermes' request dumps (see "What the model was sent").
-- **Day folder** is the session's start date in IST, so "yesterday" is my yesterday.
-- **Sessions span days.** A chat is one session until `/new`. The export re-writes a trace whenever
-  the session has new messages (a trace can always be regenerated from `state.db`, so overwriting
-  is safe). The annotation records the message count it saw; the page shows "new messages since
-  annotated" instead of silently trusting an old verdict.
+- **A trace is one conversation, not one Hermes session.** Hermes keeps a Telegram chat as one session until
+  `/new` (core no longer resets on a timer), so a session can hold days of unrelated conversations. The export
+  splits a session wherever the silence between two consecutive messages is longer than `-gap` (default 60
+  minutes; strictly longer; 0 turns it off). A conversation stays multi-turn: turns are never separated. The first
+  conversation keeps the session id (`<id>`), later ones are `<id>.2`, `<id>.3`, each filed under its own IST
+  start day. A session that never pauses exports exactly as before. Session totals (tokens, cost) are not
+  divisible and stay on the first conversation. Fields: `session_id`, `segment`, `segments`,
+  `gap_before_minutes`. Cut by time, so a long-running tool that outlasts the gap would split a call from its
+  result (`integrity.orphan_call` would say so); audit entries and approvals go to the conversation they fall
+  in (an approval tap in the silence goes to the one before it).
+- **What each conversation was sent.** A later conversation's first request is stored in full and marked with
+  `carried_messages`: Hermes sent the model the whole session so far, unrelated history included, and the page
+  says so. `state.db` keeps only a hash of the system prompt; the text, the tool schemas and what each model
+  call was sent come from Hermes' request dumps (see "What the model was sent").
+- **Day folder** is the conversation's start date in IST, so "yesterday" is my yesterday.
+- **A conversation can grow.** It is re-written whenever the session has new messages (a trace can always be
+  regenerated from `state.db`, so overwriting is safe). The annotation records the message count it saw; the
+  page shows "new messages since annotated" instead of silently trusting an old verdict.
 - **Annotations are overwritten** per trace (latest wins; one user). The bucket's rule that expires
   old versions after 30 days may cover `evals/`; `evals/` needs its own lifecycle rule with no
   expiry (see open questions).
@@ -438,6 +449,7 @@ finding **and** on any trace it could not read: a check that did not run is not 
 | `tool.error` | flag | all | A tool result whose JSON carries a non-empty `error`, `status: error` or `success: false`. Parsed, not text-matched (`"error": null` is fine) |
 | `memory.miss` | flag | telegram | `memory.get` on a document that does not exist: a guessed path |
 | `loop.repeat_call` | fail | all | The same tool with the same arguments three or more times (key order ignored) |
+| `session.not_reset` | flag | telegram | A conversation that began with a message you wrote after more than an hour of silence in the same session: a reset policy would have ended it. The check for whether the idle reset works |
 | `tools.surface` | info | all | Non-gateway tools used. Inventory only until there is an allow-list |
 | `ask.before_memory` | flag | telegram | A question asked with no memory call first. **Heuristic**: the question detector is crude and the question may not have needed memory |
 

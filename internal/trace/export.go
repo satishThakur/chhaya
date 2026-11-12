@@ -18,6 +18,7 @@ type ExportOptions struct {
 	OutDir string        // traces are written to OutDir/days/DAY/trace-ID.json
 	S3     string        // optional s3://bucket/evals prefix to upload to
 	Since  time.Duration // sessions with a message newer than Now-Since; 0 means all
+	Gap    time.Duration // a silence longer than this inside a session starts a new trace; 0 means never split
 	Now    time.Time
 	Query  Query
 	Run    Runner
@@ -58,34 +59,36 @@ func Export(o ExportOptions) (ExportResult, error) {
 		m.Attach(t.Messages)
 	}
 	var errs []error
-	for _, t := range traces {
-		t.Unmatched, t.Events = m.Residue(t.Started, t.LastMessage)
-		t.Counters = Count(t.Messages)
-		t.MessageCount = len(t.Messages)
-		t.LLM = ReadLLM(filepath.Join(o.Home, "hermes", "sessions"), t)
-		t.ExportedAt = o.Now.UTC()
-		if len(t.Unmatched) > 0 {
-			res.Flagged++
-		}
-		rel := filepath.Join("days", t.Day, "trace-"+t.ID+".json")
-		dst := filepath.Join(o.OutDir, rel)
-		b, err := json.MarshalIndent(t, "", "  ")
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		if err := writeAtomic(dst, b); err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		res.Written = append(res.Written, dst)
-		if o.S3 != "" {
-			key := strings.TrimRight(o.S3, "/") + "/" + filepath.ToSlash(rel)
-			if _, err := o.Run("aws", "s3", "cp", "--only-show-errors", dst, key); err != nil {
-				errs = append(errs, fmt.Errorf("upload %s: %w", t.ID, err))
+	for _, sess := range traces {
+		sess.Unmatched, sess.Events = m.Residue(sess.Started, sess.LastMessage)
+		sess.Counters = Count(sess.Messages)
+		sess.MessageCount = len(sess.Messages)
+		sess.ExportedAt = o.Now.UTC()
+		sess.LLM = ReadLLM(filepath.Join(o.Home, "hermes", "sessions"), sess)
+		for _, t := range Split(sess, o.Gap) {
+			if len(t.Unmatched) > 0 {
+				res.Flagged++
+			}
+			rel := filepath.Join("days", t.Day, "trace-"+t.ID+".json")
+			dst := filepath.Join(o.OutDir, rel)
+			b, err := json.MarshalIndent(t, "", "  ")
+			if err != nil {
+				errs = append(errs, err)
 				continue
 			}
-			res.Uploaded++
+			if err := writeAtomic(dst, b); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			res.Written = append(res.Written, dst)
+			if o.S3 != "" {
+				key := strings.TrimRight(o.S3, "/") + "/" + filepath.ToSlash(rel)
+				if _, err := o.Run("aws", "s3", "cp", "--only-show-errors", dst, key); err != nil {
+					errs = append(errs, fmt.Errorf("upload %s: %w", t.ID, err))
+					continue
+				}
+				res.Uploaded++
+			}
 		}
 	}
 	return res, errors.Join(errs...)

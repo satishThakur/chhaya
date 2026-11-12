@@ -20,8 +20,10 @@ import (
 
 const traceUsage = `chhayactl trace <command>
 
-  export [-home DIR] [-out DIR] [-s3 URI] [-since 2d | -all]
-         build one trace per session from Hermes' state.db and the audit log; write them to
+  export [-home DIR] [-out DIR] [-s3 URI] [-since 2d | -all] [-gap 60m]
+         build one trace per conversation from Hermes' state.db and the audit log. A Hermes
+         session lasts until /new, so a silence longer than -gap (default 60m, 0 = never) inside
+         one starts a new trace: <id>, <id>.2, <id>.3. Write them to
          OUT/days/DAY/trace-ID.json and, with -s3 s3://bucket/evals, upload them. Read-only
          on state.db and the audit log; run it on the box after the backup.
   serve  [-dir DIR] [-s3 URI] [-port 8787]
@@ -100,6 +102,7 @@ func runTrace(args []string, out io.Writer, d traceDeps) error {
 	s3 := fs.String("s3", "", "s3://bucket/evals prefix")
 	since := fs.String("since", "2d", "export sessions with a message newer than this")
 	all := fs.Bool("all", false, "export every session")
+	gap := fs.Duration("gap", trace.DefaultGap, "export: a silence longer than this inside a session starts a new trace (0 = never)")
 	port := fs.Int("port", 8787, "port for serve (127.0.0.1 only)")
 	day := fs.String("day", "", "check only this IST day (YYYY-MM-DD)")
 	asJSON := fs.Bool("json", false, "check: print the report as JSON")
@@ -124,7 +127,7 @@ func runTrace(args []string, out io.Writer, d traceDeps) error {
 		if o == "" {
 			o = *dir
 		}
-		res, err := trace.Export(trace.ExportOptions{Home: *home, OutDir: o, S3: *s3, Since: window, Now: d.now(), Query: d.query, Run: d.run})
+		res, err := trace.Export(trace.ExportOptions{Home: *home, OutDir: o, S3: *s3, Since: window, Gap: *gap, Now: d.now(), Query: d.query, Run: d.run})
 		fmt.Fprintln(out, res)
 		if res.Flagged > 0 {
 			fmt.Fprintf(out, "note: %d trace(s) have gateway calls no message claimed; the page shows them in red\n", res.Flagged)

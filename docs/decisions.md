@@ -769,3 +769,13 @@ second user or inbound access, or the bot naming convention stops being enforcea
 **Consequences.** `ask.before_memory` is a flag, not a failure, until annotations show it agrees with what the owner calls wrong. `tools.surface` is inventory until the owner sets an allow-list of Hermes built-in tools per source. Thresholds for tool-call counts and latency are not set until there is a baseline.
 
 **Reopen if:** a check disagrees with the owner's labels often enough to be noise (fix or drop it), or a failure mode appears in annotation that no check can state (that is the case for a calibrated judge).
+
+## 2026-11-12: a trace is one conversation, split at 60 minutes of silence
+
+**Decision.** `trace export` splits a Hermes session into conversations wherever the time between two consecutive messages is longer than 60 minutes (`-gap`, 0 disables). One trace is one conversation and stays multi-turn. The first keeps the session id and later ones are `<id>.2`, `<id>.3`. Per-turn traces were considered and rejected by the owner: follow-ups need the turns before them.
+
+**Why.** Hermes keeps a Telegram chat as one session until `/new`, and core no longer resets on a timer, so sessions hold days of unrelated conversations (one pinned-image session ran 2.4 days; the first four real sessions split into 11 conversations). Annotation needs a unit a person can judge. The split is on our side, so it works whatever Hermes does and stays valid after a reset policy is added.
+
+**Consequences.** Annotations attach to a conversation id. A later conversation's first model request still carries the whole earlier session (marked `carried_messages`), which shows how much unrelated history the model saw. `session.not_reset` is a check that reads the same gaps to tell whether an idle reset works. A tool that runs longer than the gap would split a call from its result; none has been seen.
+
+**Reopen if:** 60 minutes cuts real conversations in two (annotation would show a trace that starts mid-thought), or sessions are reset by policy often enough that the split rarely fires.

@@ -31,6 +31,8 @@ func All() []Check {
 			Doc: "memory.get named a document that does not exist: the agent guessed a path."},
 		{Name: "loop.repeat_call", Level: Fail, Run: repeatedCalls,
 			Doc: "The same tool with the same arguments three or more times."},
+		{Name: "session.not_reset", Level: Flag, Applies: telegramOnly, Run: notReset,
+			Doc: "You wrote to a session that had been silent for over an hour. A session reset policy (idle) would have started a fresh one."},
 		{Name: "tools.surface", Level: Info, Run: toolSurface,
 			Doc: "Tools used that are not gateway tools. Inventory only until there is an allow-list."},
 		{Name: "ask.before_memory", Level: Flag, Applies: telegramOnly, Run: askBeforeMemory,
@@ -185,6 +187,17 @@ func unanswered(t *trace.Trace) []Finding {
 		out = append(out, f(m.ID, "no text reply before the next message of yours"))
 	}
 	return out
+}
+
+// notReset fires on a conversation that began, after a long silence, with a message the
+// owner wrote: the session was still open when it should have been reset. A conversation
+// that begins with an injected message (a cron delivery) is not this: the idle policy
+// resets on the owner's next message, not on background traffic.
+func notReset(t *trace.Trace) []Finding {
+	if t.GapBeforeMinutes <= 0 || len(t.Messages) == 0 || !isHuman(t.Messages[0]) {
+		return nil
+	}
+	return []Finding{f(t.Messages[0].ID, "continued session %s after %d minutes of silence; carried its earlier history", t.SessionID, t.GapBeforeMinutes)}
 }
 
 // ---- tools -------------------------------------------------------------------
