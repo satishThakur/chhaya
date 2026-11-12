@@ -118,3 +118,31 @@ documented the expected error in `docker-compose.yml` and `docs/ship-a-change.md
 
 **Lesson.** Not every ERROR line is a fault. Before "fixing" a recurring error, find out what it
 protects and what silencing it would cost.
+
+## 8. `make dev-up` does not restart Hermes when only its config changed (2026-11-12)
+
+**What we saw.** After adding the session-reset block to `hermes/config.yaml` and running `make dev-up`,
+the rendered file had the new block but `hermes plugins list` showed the plugin disabled and nothing reset.
+
+**Cause.** The rendered config is a single bind-mounted file. Rewriting it leaves the container definition
+unchanged, so Compose does not recreate the container, and Hermes reads its config only at start.
+
+**What we did.** Restart Hermes after a config-only change: `docker restart deploy-hermes-1`. Recorded in
+`docs/session-reset.md`. A change to an env file is different: it needs a recreate (`make dev-up`), as the
+request-dump flag did.
+
+**Still open.** `dev-up` could say when it rendered a changed config and Hermes was not restarted.
+
+## 9. A reset session recovered its context by searching (2026-11-12)
+
+**What we saw.** After the idle reset, asked "what was my last message?", the agent answered correctly from
+a session with no history.
+
+**Cause.** Hermes has a `session_search` tool over `state.db`. The agent found it with `tool_search`, browsed
+the previous session and read it. The reset closes a session; it does not delete it, and each new session
+records its predecessor as its parent.
+
+**What we did.** Nothing; it removes much of the worry that a 30-minute reset loses context. Not shown: whether
+it searches without being asked, which matters for replies to the digest.
+
+**Still open.** Watch for conversations that open with an implicit reference during annotation.

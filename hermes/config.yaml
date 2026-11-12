@@ -119,3 +119,20 @@ memory:
   # $HERMES_HOME/pending/memory/ for `/memory approve <id>`. Durable facts about the
   # user belong in Personal memory via memory.propose_update; this is the small cache.
   write_approval: true
+
+# Hermes core no longer ends a conversation on a timer: a Telegram chat stays one session
+# until /new, so sessions run for days, cost grows with them, memory is not re-read, and
+# traces mix unrelated work. This block is read by the hermes-session-reset-policy plugin
+# (reviewed and pinned; docs/session-reset.md). Core ignores it. The plugin ends the session
+# on the first message of yours after `idle_minutes` of silence. `idle` only: `at_hour`
+# would use the container's clock. Install the plugin once per machine:
+#   docker exec deploy-hermes-1 hermes plugins install hermes-session-reset-policy \
+#     --ref 0f2ea5ad995f1e4ba7c92c2dbd21afa868b8ae21 --no-enable
+# This file is re-rendered on every dev-up, so enabling belongs here, not in `hermes plugins enable`.
+session_reset:
+  mode: idle
+  idle_minutes: 30
+
+plugins:
+  enabled:
+    - hermes-session-reset-policy

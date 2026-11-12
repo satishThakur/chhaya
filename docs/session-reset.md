@@ -1,7 +1,6 @@
 # Session reset policy
 
-**Status:** reviewed 2026-11-12, not installed. This is the plan and the evidence for it; nothing here
-has been run against the box. Related: `docs/bugs.md` B10 (Telegram threads), `docs/observability-and-evals.md`
+**Status:** reviewed 2026-11-12; installed and verified on the desktop stack the same day; **not yet on the box**. Related: `docs/bugs.md` B10 (Telegram threads), `docs/observability-and-evals.md`
 (a trace is one conversation).
 
 ## The problem
@@ -87,20 +86,36 @@ plugins:
     - hermes-session-reset-policy
 ```
 
-## Steps (unverified; run on the desktop first)
+## Steps (steps 1 to 4 verified on the desktop, 2026-11-12; the box is next)
 
 1. Install the pinned commit, disabled: `docker exec -it deploy-hermes-1 hermes plugins install
    hermes-session-reset-policy --ref 0f2ea5ad995f1e4ba7c92c2dbd21afa868b8ae21 --no-enable`. It installs under
    the Hermes data directory (`~/.chhaya/hermes/plugins`), which survives container recreation and is in the
    backup. Hermes scans the plugin and asks for consent to its declared hook.
-2. Add the config above to `hermes/config.yaml`; `make dev-up`.
-3. Check the log: `docker logs deploy-hermes-1 2>&1 | grep session-reset-policy` should show `armed`.
-4. Test: message the dev bot, wait 31 minutes, message again. The second message should be in a new session
-   (`sqlite3 -readonly ~/.chhaya/hermes/state.db "select id, started_at from sessions order by started_at desc limit 3"`).
+2. Add the config above to `hermes/config.yaml`; `make dev-up`, then **`docker restart deploy-hermes-1`**.
+   `dev-up` re-renders the file but does not recreate Hermes when only that file changed, so Hermes keeps the
+   config it started with.
+3. Check it is loaded: `docker exec deploy-hermes-1 hermes plugins list --plain --no-bundled` shows
+   `enabled  catalog:community@0f2ea5ad  0.3.0`. The log will not say `armed`: Hermes logs at warning level and
+   the plugin logs at info, so the log cannot confirm it.
+4. Test by behaviour: message the bot, wait longer than the limit, message again, and read the sessions
+   (`sqlite3 -readonly ~/.chhaya/hermes/state.db "select id, datetime(ended_at,'unixepoch'), end_reason, parent_session_id from sessions where source='telegram' order by started_at desc limit 4"`).
+   The old session should have `end_reason = session_reset` and the new one should name it as its parent.
 5. Repeat on the box after a `git pull`, then confirm with `chhayactl trace export` and `trace check`:
    no new conversation should fire `session.not_reset`.
 
 **Rollback:** remove the two config blocks, `hermes plugins remove hermes-session-reset-policy`, `make dev-up`.
+
+## Desktop test result (2026-11-12, limit temporarily 2 minutes, restored to 30)
+
+- 16:23:00, a message after 3 days of silence: the old session `3f13f8fd` ended at 16:23:01 with
+  `end_reason = session_reset`, and a new session began with it as parent.
+- 16:27:11, a message 4 minutes later: that session ended at 16:27:13 (`session_reset`) and another began.
+- In the new session the owner asked "what was my last message?". With no history, the agent used `tool_search`
+  to find `session_search`, browsed the previous session, read it and answered correctly, in 5 tool calls and
+  about 10 seconds. So a reset does not leave the agent amnesiac **when asked about earlier context**. An implicit
+  reference ("the second item") gives it no reason to search and is untested.
+- `session.not_reset` fired on none of the day's three Telegram conversations.
 
 ## Open
 
