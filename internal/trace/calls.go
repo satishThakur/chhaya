@@ -40,10 +40,13 @@ type LLMCall struct {
 	// Total is how many non-system messages the request held. New is the ones added since
 	// the previous call; when the request is not an extension of the previous one
 	// (history was compacted or rewritten) Reset is true and New holds all of them.
-	Total    int               `json:"total"`
-	Reset    bool              `json:"reset,omitempty"`
-	Attempts int               `json:"attempts,omitempty"` // >1 when the same request was retried
-	New      []json.RawMessage `json:"new"`
+	Total    int  `json:"total"`
+	Reset    bool `json:"reset,omitempty"`
+	Attempts int  `json:"attempts,omitempty"` // >1 when the same request was retried
+	// Carried is set on the first call of a later conversation in a split session: how many
+	// of its messages came from before that conversation began. Hermes sent them anyway.
+	Carried int               `json:"carried_messages,omitempty"`
+	New     []json.RawMessage `json:"new"`
 	// Reply is the state.db id of the assistant message this call produced, 0 if it could
 	// not be established. Never guessed.
 	Reply int64 `json:"reply_message_id,omitempty"`

@@ -275,6 +275,12 @@ func TestTraceExportReportsAndPassesItsFlags(t *testing.T) {
 	if !strings.Contains(out.String(), "exported 0 trace(s)") {
 		t.Errorf("output = %q", out.String())
 	}
+	if err := runTrace([]string{"export", "-home", home, "-out", t.TempDir(), "-gap", "2h"}, &out, d); err != nil {
+		t.Errorf("-gap takes a duration: %v", err)
+	}
+	if err := runTrace([]string{"export", "-gap", "later"}, &out, d); err == nil {
+		t.Error("a bad -gap must be an error")
+	}
 	if err := runTrace([]string{"export", "-since", "soon"}, &out, d); err == nil {
 		t.Error("a bad -since must be an error")
 	}

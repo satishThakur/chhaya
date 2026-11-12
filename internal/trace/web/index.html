@@ -245,6 +245,7 @@ function callPanel(llm, c) {
   const d = el("details", "llm");
   const isFirst = c === llm.calls[0];
   const bits = ["① Request sent to the model", c.total + " messages in context", isFirst ? "first request recorded" : "+" + (c.new || []).length + " new"];
+  if (c.carried_messages) bits.push("carries " + c.carried_messages + " message(s) from earlier conversations in this session");
   if (c.attempts > 1) bits.push("sent " + c.attempts + "×");
   if (c.reset) bits.push("history was rewritten here");
   const first = llm.calls[0];
@@ -301,7 +302,8 @@ function render() {
   $("prev").disabled = cur === 0; $("next").disabled = cur === refs.length - 1;
   const meta = $("meta"); meta.textContent = "";
   const kv = (k, v) => { meta.append(el("b", null, k + " "), document.createTextNode(v + "   ")); };
-  kv("session", t.id); kv("source", t.source); kv("started", ist(t.started));
+  kv("trace", t.id); kv("source", t.source);
+  if (t.segments > 1) kv("conversation", t.segment + " of " + t.segments + " in session " + t.session_id + (t.gap_before_minutes ? " (after " + Math.round(t.gap_before_minutes / 6) / 10 + " h of silence)" : "")); kv("started", ist(t.started));
   if (t.model) kv("model", t.model);
   kv("messages", t.message_count); kv("questions", c.questions);
   kv("memory calls before first question", c.memory_calls_before_first_question < 0 ? "never asked" : c.memory_calls_before_first_question);

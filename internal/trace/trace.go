@@ -37,6 +37,14 @@ type Trace struct {
 	CostUSD          float64   `json:"cost_usd"`
 	SystemPromptHash string    `json:"system_prompt_hash,omitempty"` // state.db keeps only the hash; the text comes from LLM
 	MessageCount     int       `json:"message_count"`
+	// A Hermes session can hold days of unrelated conversations. One trace is one conversation:
+	// the messages between two silences longer than the export gap (see Split). SessionID is
+	// the Hermes session; Segment of Segments says which conversation this is; GapBeforeMinutes
+	// is the silence that preceded it. All are zero on a trace that was never split.
+	SessionID        string    `json:"session_id,omitempty"`
+	Segment          int       `json:"segment,omitempty"`
+	Segments         int       `json:"segments,omitempty"`
+	GapBeforeMinutes int       `json:"gap_before_minutes,omitempty"`
 	Messages         []Message `json:"messages"`
 	// Unmatched are gateway calls by Hermes inside this session's time window that no
 	// tool message claimed. Shown, never guessed away.

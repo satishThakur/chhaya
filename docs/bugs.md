@@ -208,6 +208,20 @@ The restart also discards queued messages (`drop_pending_on_cold_boot: true`).
 **Until then.** Leave threaded mode off. If the bot goes quiet: send `/start` and compare the
 bot's username with the one the box runs (`getMe`) before restarting anything.
 
+**What the pinned Hermes does with threads (read 2026-11-12; `gateway/run_topics.py`, the Telegram
+adapter, `locales/en.yaml`).** Telegram's "Threaded Mode" (BotFather, Bot Settings, Threads Settings)
+makes the private chat a list of topics. Hermes has its own opt-in on top, `/topic`, kept per chat in
+`telegram_dm_topic_mode`. With it on, each topic is an independent Hermes session (the session key
+includes the thread id), the root chat becomes a "system lobby" for commands only, `/new` replaces the
+session bound to a topic, and a new topic is made by writing in "All Messages". By default
+(`dm_topic_auto_transfer: false`) a message written in the root chat is answered **in the most
+recently bound topic**, not in the root. That is the likely reason the bot looked dead: replies went to
+a topic the owner was not looking at. Not verified on the box; the evidence is the code and the
+`telegram_dm_topic_mode` row, not the lost replies. Questions 1 and 2 are therefore partly answered: topics
+are a supported feature, and a root-chat message being answered elsewhere is documented behaviour, not
+an obvious bug. Cron deliveries to a named topic are possible (`delivery.py` creates one), which would give
+the digest its own thread. See `docs/session-reset.md` for how this combines with an idle reset.
+
 ---
 
 ## Closed
