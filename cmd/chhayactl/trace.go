@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/satishthakur/chhaya/internal/check"
 	"github.com/satishthakur/chhaya/internal/trace"
 )
 
@@ -26,6 +27,11 @@ const traceUsage = `chhayactl trace <command>
   serve  [-dir DIR] [-s3 URI] [-port 8787]
          the annotation page, on 127.0.0.1 only. Reads traces from the bucket (or from DIR),
          saves annotations to DIR at once, and pushes them with the Export button.
+
+  check  [-dir DIR] [-s3 URI] [-day YYYY-MM-DD] [-json] [-v]
+         run the deterministic checks over exported traces (no model, no Hermes). With -s3 the
+         bucket's copy is checked, not a local one. Exits non-zero on any "fail" finding or any
+         trace that could not be read. -v also lists "info" lines.
 
 DIR defaults to $CHHAYA_EVALS or ~/.chhaya/evals.
 `
@@ -95,6 +101,9 @@ func runTrace(args []string, out io.Writer, d traceDeps) error {
 	since := fs.String("since", "2d", "export sessions with a message newer than this")
 	all := fs.Bool("all", false, "export every session")
 	port := fs.Int("port", 8787, "port for serve (127.0.0.1 only)")
+	day := fs.String("day", "", "check only this IST day (YYYY-MM-DD)")
+	asJSON := fs.Bool("json", false, "check: print the report as JSON")
+	verbose := fs.Bool("v", false, "check: also list info findings")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -131,6 +140,42 @@ func runTrace(args []string, out io.Writer, d traceDeps) error {
 		fmt.Fprintf(out, "annotation page: http://%s/\n", ln.Addr())
 		fmt.Fprintf(out, "traces from %s; annotations saved in %s\n", orLocal(*s3), *dir)
 		return d.serve(ln, trace.NewHandler(st, trace.HostsFor(ln.Addr())))
+	case "check":
+		if *day != "" && !trace.ValidRef(*day, "x") {
+			return fmt.Errorf("bad -day %q: want YYYY-MM-DD", *day)
+		}
+		dir := *dir
+		if *s3 != "" {
+			// The bucket is the system of record, and a resumed session is rewritten there. An
+			// empty directory keeps a stale local copy from being read in its place.
+			tmp, err := os.MkdirTemp("", "chhaya-check-")
+			if err != nil {
+				return err
+			}
+			defer os.RemoveAll(tmp)
+			dir = tmp
+		}
+		st := &trace.Store{Dir: dir, S3: *s3, Run: d.run, Now: d.now}
+		traces, problems, err := check.Load(st, *day)
+		if err != nil {
+			return err
+		}
+		checks := check.All()
+		results := make([]check.TraceResult, 0, len(traces))
+		for _, t := range traces {
+			results = append(results, check.Run(t, checks))
+		}
+		if *asJSON {
+			if err := check.WriteJSON(out, results, checks, problems); err != nil {
+				return err
+			}
+		} else {
+			check.WriteText(out, results, checks, problems, *verbose)
+		}
+		if n := check.Failures(results); n > 0 || len(problems) > 0 {
+			return fmt.Errorf("%d failure(s), %d trace(s) not checked", n, len(problems))
+		}
+		return nil
 	default:
 		fmt.Fprint(os.Stderr, traceUsage)
 		return fmt.Errorf("unknown trace command %q", args[0])
