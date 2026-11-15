@@ -166,6 +166,11 @@ preflight() {
   # --- the model is chosen -------------------------------------------------
   # Not secret, so these live in .env.hermes next to the key they pair with.
   has_key "$DEPLOY/.env.hermes" CHHAYA_HERMES_MODEL    || { red "deploy/.env.hermes: CHHAYA_HERMES_MODEL is unset — e.g. CHHAYA_HERMES_MODEL=claude-sonnet-5"; fail=1; }
+  # Dev money: a dev stack on a dearer model than Haiku is a cost leak, not an error, so warn loudly.
+  if grep -qE '^CHHAYA_ENV=dev' "$DEPLOY/.env.hermes" 2>/dev/null \
+     && ! grep -qE '^CHHAYA_HERMES_MODEL=claude-haiku' "$DEPLOY/.env.hermes"; then
+    ylw "deploy/.env.hermes: CHHAYA_ENV=dev but CHHAYA_HERMES_MODEL is not claude-haiku-*. Dev should run the cheapest model."
+  fi
   has_key "$DEPLOY/.env.hermes" CHHAYA_HERMES_API_BASE || { red "deploy/.env.hermes: CHHAYA_HERMES_API_BASE is unset — e.g. https://api.anthropic.com/v1"; fail=1; }
 
   # --- certificates --------------------------------------------------------
@@ -292,18 +297,23 @@ ensure_plugins() {
   done
   while read -r name ref; do
     case "$name" in ''|'#'*) continue ;; esac
-    listed="$(docker exec "$c" hermes plugins list --plain --no-bundled 2>/dev/null || true)"
-    if grep -q "$name" <<<"$listed"; then continue; fi
+    # "Installed" is a directory, which is true the moment the container is up. `plugins list` is
+    # not: it answers empty while Hermes is still booting, which once caused a needless reinstall.
+    docker exec "$c" test -d "/data/plugins/$name" && continue
     ylw "installing Hermes plugin $name @ ${ref:0:8}"
     docker exec "$c" hermes plugins install "$name" --ref "$ref" --yes-deps --no-enable >/dev/null 2>&1 \
       || { red "could not install $name — the config enables it, so it is NOT active"; continue; }
     changed=1
   done < "$ROOT/hermes/plugins.lock"
-  [ "$changed" -eq 1 ] && docker restart "$c" >/dev/null && sleep 20
+  [ "$changed" -eq 1 ] && docker restart "$c" >/dev/null
   while read -r name ref; do
     case "$name" in ''|'#'*) continue ;; esac
-    docker exec "$c" hermes plugins list --plain --no-bundled 2>/dev/null | grep -q "$name" \
-      && grn "plugin active: $name" || red "plugin NOT active: $name"
+    listed=0
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+      if docker exec "$c" hermes plugins list --plain --no-bundled 2>/dev/null | grep -q "$name"; then listed=1; break; fi
+      sleep 5
+    done
+    [ "$listed" -eq 1 ] && grn "plugin active: $name" || red "plugin NOT active: $name"
   done < "$ROOT/hermes/plugins.lock"
 }
 
