@@ -281,6 +281,32 @@ cmd_certs() {
   "$ROOT/scripts/gen-certs.sh" "$DEPLOY/certs" 2>/dev/null || "$DEPLOY/gen-certs.sh" "$DEPLOY/certs"
 }
 
+# Install the plugins hermes/plugins.lock pins, when they are missing. They live under the Hermes data
+# directory, so a restored box already has them; a fresh one does not, and a config that enables a plugin
+# which is not installed fails silently (the plugin list is just empty). --yes-deps --no-enable because
+# the config enables them and `--no-deps` is refused for a plugin the config already names.
+ensure_plugins() {
+  local name ref listed changed=0 c=deploy-hermes-1 i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    docker exec "$c" true 2>/dev/null && break; sleep 2
+  done
+  while read -r name ref; do
+    case "$name" in ''|'#'*) continue ;; esac
+    listed="$(docker exec "$c" hermes plugins list --plain --no-bundled 2>/dev/null || true)"
+    if grep -q "$name" <<<"$listed"; then continue; fi
+    ylw "installing Hermes plugin $name @ ${ref:0:8}"
+    docker exec "$c" hermes plugins install "$name" --ref "$ref" --yes-deps --no-enable >/dev/null 2>&1 \
+      || { red "could not install $name — the config enables it, so it is NOT active"; continue; }
+    changed=1
+  done < "$ROOT/hermes/plugins.lock"
+  [ "$changed" -eq 1 ] && docker restart "$c" >/dev/null && sleep 20
+  while read -r name ref; do
+    case "$name" in ''|'#'*) continue ;; esac
+    docker exec "$c" hermes plugins list --plain --no-bundled 2>/dev/null | grep -q "$name" \
+      && grn "plugin active: $name" || red "plugin NOT active: $name"
+  done < "$ROOT/hermes/plugins.lock"
+}
+
 cmd_up() {
   prepare_hermes_home
   prepare_gateway_home
@@ -288,6 +314,7 @@ cmd_up() {
   render_config
   build_ca_bundle
   "${COMPOSE[@]}" up -d --build
+  ensure_plugins
   echo
   grn "stack up. Next:"
   cat <<'NEXT'

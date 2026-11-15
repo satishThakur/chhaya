@@ -1,0 +1,5 @@
+# Hermes plugins the stack needs, one per line: <catalog name> <full commit sha>.
+# `make dev-up` installs any that are missing from the Hermes data directory, at exactly this commit,
+# so a fresh box (no restored ~/.chhaya) ends up the same as the running one.
+# Enabling is done by hermes/config.yaml (plugins.enabled), not here. Bump a pin only after reading the diff.
+hermes-session-reset-policy 0f2ea5ad995f1e4ba7c92c2dbd21afa868b8ae21
