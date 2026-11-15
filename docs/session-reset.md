@@ -88,7 +88,10 @@ plugins:
 
 ## Steps (steps 1 to 4 verified on the desktop, 2026-11-12; the box is next)
 
-1. Install the pinned commit. **Do this before the config enables it**, or use the second form.
+1. Install the pinned commit. **`make dev-up` now does this itself** from `hermes/plugins.lock` (installs what is
+   missing, restarts Hermes once, prints `plugin active` or `plugin NOT active`), so a fresh box needs no manual
+   step. Verified on the desktop by removing the plugin and running `dev-up`. The manual forms, for reference:
+   **do this before the config enables it**, or use the second form.
    Before the config names it: `docker exec deploy-hermes-1 hermes plugins install
    hermes-session-reset-policy --ref 0f2ea5ad995f1e4ba7c92c2dbd21afa868b8ae21 --no-enable --no-deps`.
    Once `hermes/config.yaml` enables it (any machine that has pulled this repo and run `make dev-up`),
