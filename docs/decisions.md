@@ -779,3 +779,13 @@ second user or inbound access, or the bot naming convention stops being enforcea
 **Consequences.** Annotations attach to a conversation id. A later conversation's first model request still carries the whole earlier session (marked `carried_messages`), which shows how much unrelated history the model saw. `session.not_reset` is a check that reads the same gaps to tell whether an idle reset works. A tool that runs longer than the gap would split a call from its result; none has been seen.
 
 **Reopen if:** 60 minutes cuts real conversations in two (annotation would show a trace that starts mid-thought), or sessions are reset by policy often enough that the split rarely fires.
+
+## 2026-11-15: every session's cost is computed by us and sent to Telegram; dev runs the cheapest model
+
+**Decision.** `chhayactl cost report` prices each Hermes session from the token counts in `state.db` using `config/pricing.yaml`, and with `-send` tells the owner on Telegram, from the approver bot, once per finished session (quiet 35 minutes, or ended by Hermes; grown sessions are re-announced as the difference). A cron line in `deploy/crontab.box` runs it every 10 minutes and `box-setup.sh --cron` installs it, so a rebuilt box gets it. Dev (`CHHAYA_ENV=dev`) runs `claude-haiku-5-5`; the prod box runs Sonnet. `make dev-doctor` warns when dev is on anything else.
+
+**Why.** Hermes records tokens but not cost against a direct provider (`cost_status` is "unknown", `estimated_cost_usd` 0), so there was no number to look at. The first measurement: $30 over 15 desktop sessions in nine days, nine of the ten dearest being cron sessions at $2 to $4 each, each call carrying about 85k prompt tokens with no caching (`cache_read_tokens` is 0 on every session). Haiku 5.5 is $0.10/$0.50 per million tokens against Sonnet 5's $2/$10.
+
+**Consequences.** The price table is ours and must be kept current; a model with no entry is reported as "no price", never as $0, and a cache price that is not published is not guessed (the session is marked partial). Haiku's long-prompt tier ($0.50/$2.50 over 100k) is applied from the session's average prompt per call, so it is an estimate and says so. The message goes out from the gateway side (approver bot), not from Hermes, so the agent cannot suppress or edit its own bill. Sessions carry the model of their first call, so a session that switched models is priced at that one.
+
+**Reopen if:** Hermes starts writing a trustworthy `actual_cost_usd` (then read it and drop the table), or the provider moves behind a proxy that reports usage per request (then price per request and drop the tier estimate).

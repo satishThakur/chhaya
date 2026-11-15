@@ -1,0 +1,24 @@
+# What a model costs, USD per million tokens. Read by `chhayactl cost report`.
+# Source: Anthropic's model table, checked 2026-11-15. A price that is not written here is not
+# guessed: a session on a model with no entry is reported as "no price", never as $0.
+#
+# cache_read / cache_write: leave out what Anthropic has not published for the model. A session
+# that used cache tokens the price table cannot cost is marked partial in the report.
+# long_*: a price tier for requests whose prompt is over long_prompt_tokens. Hermes records
+# per-session totals, not per-request sizes, so the tier is applied by the session's average
+# prompt per call and the report says so (it is then an estimate).
+models:
+  claude-haiku-5-5:
+    input: 0.10
+    output: 0.50
+    long_prompt_tokens: 100000
+    long_input: 0.50
+    long_output: 2.50
+  claude-sonnet-5-5:
+    input: 2.00
+    output: 10.00
+    cache_read: 0.20
+  claude-sonnet-5:
+    input: 2.00
+    output: 10.00
+    cache_read: 0.20

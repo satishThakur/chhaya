@@ -84,3 +84,5 @@ checks before anything is moved into place.
   check refuse it; do not edit around them.
 - Commit anything from `~/.chhaya` or any `.env` file. The repo is public.
 - Run `docker compose` directly on the box; go through `make dev-*` so the environment is set.
+
+**Session costs.** `bin/chhayactl cost report` (from the repo root, on the desktop or the box) prints every session by cost; `-send` is what the box's cron runs. Prices are in `config/pricing.yaml`: when a model changes, change the table in the same commit. The record of what was already sent is `~/.chhaya/gateway/cost-reported.json` (in the backup).
