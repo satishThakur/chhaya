@@ -26,3 +26,10 @@ background agents (extractor, reorganizer) propose improvements through the appr
 request, how it fits the gateway, staging and open questions: `docs/memory-selftest.md`. The first
 stages (fact ids and probes, the eval runner) are measurement and can follow the eval runner; the
 agents are features and wait for the freeze to lift.
+
+## Cost levers (measured 2026-11-15, not yet pulled)
+
+First cost report: about 85k prompt tokens per model call, no caching, and the daily digest (cron) is the dearest single job. In order of expected saving; each one is measurement plus a config change, not a feature.
+1. **Prompt caching.** `cache_read_tokens` is 0 everywhere. Hermes talks to `https://api.anthropic.com/v1/chat/completions` (the OpenAI-compatible endpoint), whose usage block has no cache fields; whether that endpoint caches at all, and whether Hermes has a native Anthropic transport that sets `cache_control`, is unverified. Cache reads are 10% of the input price.
+2. **What fills the 85k.** The system prompt, the tool schemas and the skills prompt are re-sent on every call. The request dumps (`HERMES_DUMP_REQUESTS=1`) show the split; trim toolsets and skills the digest does not use.
+3. **The digest on Haiku** (or a cheaper schedule) once it is measured against the labels.

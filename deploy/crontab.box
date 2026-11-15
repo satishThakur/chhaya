@@ -14,3 +14,10 @@ CHHAYA_BACKUP_S3=s3://chhaya-backup-803874683069-ap-south-1/backups
 # the other. docs/observability-and-evals.md. If this line is new on a running box, install
 # it with `crontab deploy/crontab.box` (box-setup.sh --cron does too).
 45 20 * * * cd /home/ubuntu/chhaya && go build -o bin/chhayactl ./cmd/chhayactl && bin/chhayactl trace export -s3 s3://chhaya-backup-803874683069-ap-south-1/evals >> /home/ubuntu/.chhaya/backups/export.log 2>&1
+
+# Cost of each finished Hermes session, sent to you on Telegram by the approver bot. Every 10
+# minutes; a session counts as finished once it is 35 minutes quiet (the idle reset is 30) or
+# Hermes ended it. Prices are config/pricing.yaml; what was already sent is remembered in
+# ~/.chhaya/gateway/cost-reported.json. If this line is new on a running box, install it with
+# `crontab deploy/crontab.box` (box-setup.sh --cron does too).
+*/10 * * * * cd /home/ubuntu/chhaya && go build -o bin/chhayactl ./cmd/chhayactl && bin/chhayactl cost report -send -q >> /home/ubuntu/.chhaya/backups/cost.log 2>&1
