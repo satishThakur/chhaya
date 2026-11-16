@@ -789,3 +789,13 @@ second user or inbound access, or the bot naming convention stops being enforcea
 **Consequences.** The price table is ours and must be kept current; a model with no entry is reported as "no price", never as $0, and a cache price that is not published is not guessed (the session is marked partial). Haiku's long-prompt tier ($0.50/$2.50 over 100k) is applied from the session's average prompt per call, so it is an estimate and says so. The message goes out from the gateway side (approver bot), not from Hermes, so the agent cannot suppress or edit its own bill. Sessions carry the model of their first call, so a session that switched models is priced at that one.
 
 **Reopen if:** Hermes starts writing a trustworthy `actual_cost_usd` (then read it and drop the table), or the provider moves behind a proxy that reports usage per request (then price per request and drop the tier estimate).
+
+## 2026-11-16: prod chat runs on Sonnet, the digest cron is pinned to Haiku
+
+**Decision.** Prod's `CHHAYA_HERMES_MODEL` is `claude-sonnet-5-5`, so Telegram conversations use it. Cron jobs named in `hermes/cron-models.tsv` carry their own model through Hermes' per-job `model`/`provider` fields; the digest is pinned to `claude-haiku-5-5`. `scripts/dev.sh cron-models` applies the file (idempotent, `--check` reports drift) and writes only through `hermes cron edit`. Dev stays on Haiku everywhere. Supersedes the "prod on Haiku for now" half of 2026-11-15.
+
+**Why.** Trace 2026-11-16 (podcast request): Haiku read "this is also done :)" as approval and ended the turn, and told the owner a fact about a past session it could not see. The digest, by contrast, runs a fixed skill and Haiku does it well, and it is nine of the ten dearest sessions. So the split follows the work: judgement in chat, a scripted pipeline in cron.
+
+**Consequences.** The pin lives in Hermes' job file, not in this repo, so the repo holds the intent (the tsv) and the script re-applies it; run it after any job is recreated. A session keeps the model of its first call, so a conversation open at the restart stays on Haiku until `/new` or the idle reset. Not yet checked: whether Hermes' auxiliary calls (titles, compression) follow the main model and so now bill at Sonnet rates.
+
+**Reopen if:** the cost report shows chat on Sonnet costing more than the owner will pay for, or a second cron job is added (then decide whether routing belongs per skill).

@@ -1,0 +1,8 @@
+# Which model each Hermes cron job runs on. Everything else (Telegram chat, and any job not
+# listed) follows model.default, which is CHHAYA_HERMES_MODEL in deploy/.env.hermes.
+# Applied by `scripts/dev.sh cron-models`, which `box-setup.sh` and the runbook call, because a
+# pin lives in Hermes' own job file and a hand-run `hermes cron edit` is lost when the job is
+# recreated. docs/decisions.md, 2026-11-16.
+#
+# job name <TAB> model <TAB> provider
+Daily ML/AI Advancements Digest	claude-haiku-5-5	chhaya
