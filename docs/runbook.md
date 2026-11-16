@@ -30,7 +30,8 @@ directions before anything starts.
 provider directly and accept that you get no traces:
 
 ```
-CHHAYA_HERMES_MODEL=claude-haiku-5-5      # dev; the prod box uses claude-sonnet-5-5
+CHHAYA_HERMES_MODEL=claude-haiku-5-5      # dev; the prod box uses claude-sonnet-5-5 (chat) and
+                                          # pins cron jobs per hermes/cron-models.tsv: `scripts/dev.sh cron-models`
 CHHAYA_HERMES_API_BASE=https://api.anthropic.com/v1
 PROXY_API_KEY=<the key for that endpoint>
 ```

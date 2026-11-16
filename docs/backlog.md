@@ -34,7 +34,7 @@ First cost report: about 85k prompt tokens per model call, no caching, and the d
 2. **What fills the 85k.** The system prompt, the tool schemas and the skills prompt are re-sent on every call. The request dumps (`HERMES_DUMP_REQUESTS=1`) show the split; trim toolsets and skills the digest does not use.
 3. **The digest on Haiku** (or a cheaper schedule) once it is measured against the labels.
 
-## Route different tasks to different models or endpoints (asked 2026-11-15, for later)
+## Route different tasks to different models or endpoints (cron half DONE 2026-11-16, see decisions.md; remainder open)
 
 Today one model serves everything (`model.default` in `hermes/config.yaml`, from `CHHAYA_HERMES_MODEL`). Leads found in the pinned Hermes, none tried: `providers:` can hold several providers; Hermes cron jobs can pin their own model (`cron/jobs.py`); auxiliary work (titles, compression) is a separate call path with its own hooks (`pre_/post_auxiliary_call`), so it can be billed to its own model and its cost is not in the sessions table. The design question is where the rule lives: per cron job, per skill, or per message class, and the digest on Haiku with chat on Sonnet is the first case.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Local development control for the two-container stack.
 #
-#   scripts/dev.sh up|down|restart|status|logs|audit|stop|resume|doctor|backup
+#   scripts/dev.sh up|down|restart|status|logs|audit|stop|resume|doctor|backup|cron-models
 #
 # Invoked through the Makefile (`make dev-up`), which is where the verbs are
 # discoverable. The logic lives here because preflight needs real conditionals.
@@ -399,6 +399,42 @@ cmd_backup() {
   grn "backup done: $(basename "$archive")"
 }
 
+# Pin each cron job to the model hermes/cron-models.tsv names for it. Idempotent: a job that
+# is already pinned right is left alone, and a job named in the file but not yet created is
+# reported, not an error (the agent creates the digest, so a fresh box has none).
+# Reads the job file, writes only through `hermes cron edit`, so Hermes stays the one writer.
+cmd_cron_models() {
+  local want="$ROOT/hermes/cron-models.tsv" check=0 rc=0
+  [ "${1:-}" = "--check" ] && check=1
+  [ -f "$want" ] || die "missing $want"
+  local jobs
+  jobs="$("${COMPOSE[@]}" exec -T hermes python3 -c '
+import json
+d = json.load(open("/data/cron/jobs.json"))
+for j in (d.get("jobs", d) if isinstance(d, dict) else d):
+    print("\t".join([j["id"], j.get("name") or "", j.get("model") or "", j.get("provider") or ""]))
+')" || die "could not read the cron jobs from the hermes container (is the stack up?)"
+  while IFS=$'\t' read -r name model provider; do
+    case "$name" in ''|'#'*) continue ;; esac
+    local id cur_model cur_provider found=0
+    while IFS=$'\t' read -r id jname cur_model cur_provider; do
+      [ "$jname" = "$name" ] || continue
+      found=1
+      if [ "$cur_model" = "$model" ] && [ "$cur_provider" = "$provider" ]; then
+        grn "ok       $name -> $model"
+      elif [ "$check" -eq 1 ]; then
+        ylw "DRIFT    $name is ${cur_model:-<follows default>}, want $model"; rc=1
+      else
+        "${COMPOSE[@]}" exec -T hermes hermes cron edit "$id" --model "$model" --provider "$provider" >/dev/null \
+          || die "hermes cron edit failed for $name"
+        grn "pinned   $name -> $model"
+      fi
+    done <<<"$jobs"
+    [ "$found" -eq 1 ] || ylw "absent   $name (no such job yet; run this again once it exists)"
+  done <"$want"
+  return "$rc"
+}
+
 cmd_doctor() { preflight && grn "ready to start"; }
 
 case "${1:-}" in
@@ -414,10 +450,12 @@ case "${1:-}" in
   certs)   cmd_certs ;;
   doctor)  cmd_doctor ;;
   backup)  cmd_backup ;;
+  cron-models) shift; cmd_cron_models "$@" ;;
   *) cat >&2 <<'USAGE'
 usage: scripts/dev.sh <command>
 
   backup    stop, back up to S3, restart (needs CHHAYA_BACKUP_S3)
+  cron-models [--check]  pin cron jobs to the models in hermes/cron-models.tsv
   doctor    check env files, tokens, certs — changes nothing
   certs     generate the CA and both certificates (once)
   up        preflight, render Hermes' config, build and start both containers
