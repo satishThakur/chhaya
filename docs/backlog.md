@@ -48,4 +48,4 @@ Hermes has plugin hooks (`on_session_end` per turn, `on_session_finalize`, `on_s
 
 ## Dreaming pipeline: nightly memory extractor (design only, asked 2026-11-16)
 
-Design in `docs/dreaming.md`. Blocked on: a baseline from the nightly checks, a smaller trace-replay eval runner, and a second gateway client (`dreamer`) with its own policy.
+Design in `docs/dreaming.md` (memory as a module: branch, gates, canary; reshaped 2026-11-16). First, and inside the freeze: the owner's memory tests (probes and golden set) and the gates and canary as code. After that, needs the freeze lifted: the `dreamer` gateway client, the lossless pass, the extractor.
