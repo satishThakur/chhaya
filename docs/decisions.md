@@ -809,3 +809,13 @@ second user or inbound access, or the bot naming convention stops being enforcea
 **Consequences.** All three are heuristics on wording and are `flag`, never `fail`. The correction cues are a list of phrases and will miss other ways of saying it; each miss found in a trace is a phrase to add, with a test. Results are in a log on the box, not yet in Telegram or S3.
 
 **Reopen if:** `owner_correction` fires on traces the owner calls fine (then it is noise: tighten the cues), or the log goes unread for a week (then push it to Telegram).
+
+## 2026-11-16: memory is a module with its own tests; the nightly agent may reorganize without a tap, but adding facts still needs one
+
+**Decision.** The dreaming pipeline (`docs/dreaming.md`) works on a branch of the memory repo and lands a change only when code-run gates pass: fact survival, the probe suite, the owner's golden set, and shape. By risk: reorganizing and merging exact duplicates are automatic once the gates pass (merged by the gateway, not the agent, then summarized to the owner); adding a fact needs a tap, batched into one card; rewording, superseding or deleting a fact needs a tap always. A nightly canary replays the tests against live memory and the gateway reverts the last commit if something that passed now fails. The tests are the owner's and the agent has no write path to them. Rollback is the gateway's call, never the agent's.
+
+**Why.** The owner's proposal: automatic, versioned, tested, rolled back at runtime. Taken whole it removes the human from the one change where a mistake is expensive (a wrong inference stored as truth), and the runtime signal is too thin to drive a rollback (one user, a handful of sessions a day, checks that fire a few times a week). The lossless tier can be proved safe by a deterministic gate, so it needs no tap; new facts cannot, so they keep one until the extraction evals say otherwise.
+
+**Consequences.** CLAUDE.md's non-negotiable "never edit Personal memory directly; only `memory.propose_update`" gains one exception, the gateway merging a gated lossless branch. It is amended when that lands (build step 5), not now. New gateway work: a `dreamer` client with its own policy and blocked-case tests. Auto-applying additions is a separate later decision and would need a veto window. Building the tests, gates and canary (steps 1 to 3) fits the 2026-11-08 freeze; the rest needs the owner to lift it.
+
+**Reopen if:** the approval rate on batched fact proposals is high and steady (then auto-apply with a veto window), the tests prove too weak to catch a bad reorganization (then the lossless tier needs a tap too), or the owner's own signals start to carry enough data to drive a rollback.
