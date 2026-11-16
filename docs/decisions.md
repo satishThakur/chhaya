@@ -799,3 +799,13 @@ second user or inbound access, or the bot naming convention stops being enforcea
 **Consequences.** The pin lives in Hermes' job file, not in this repo, so the repo holds the intent (the tsv) and the script re-applies it; run it after any job is recreated. A session keeps the model of its first call, so a conversation open at the restart stays on Haiku until `/new` or the idle reset. Not yet checked: whether Hermes' auxiliary calls (titles, compression) follow the main model and so now bill at Sonnet rates.
 
 **Reopen if:** the cost report shows chat on Sonnet costing more than the owner will pay for, or a second cron job is added (then decide whether routing belongs per skill).
+
+## 2026-11-16: the deterministic checks run on every session, nightly; three new ones from the podcast trace
+
+**Decision.** `chhayactl trace check` runs from `deploy/crontab.box` at 20:50 UTC, after the export, over the IST day that ended and the new one, logging to `~/.chhaya/backups/check.log`. `box-setup.sh --cron` requires the line. Three checks were added: `reply.owner_correction`, `recommend.unsearched`, `routing.chat_model`.
+
+**Why.** Until today zero evals ran on production sessions. The eleven existing checks, run by hand on 2026-11-16, found nothing wrong with the one session that went wrong (three recommendations the owner had already consumed, a reply "done :)" read as approval): they cover integrity and tool errors, not whether the answer was right. The new checks fire on exactly that session and on none of the traces from Nov 11 to 15.
+
+**Consequences.** All three are heuristics on wording and are `flag`, never `fail`. The correction cues are a list of phrases and will miss other ways of saying it; each miss found in a trace is a phrase to add, with a test. Results are in a log on the box, not yet in Telegram or S3.
+
+**Reopen if:** `owner_correction` fires on traces the owner calls fine (then it is noise: tighten the cues), or the log goes unread for a week (then push it to Telegram).

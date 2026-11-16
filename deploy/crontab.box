@@ -21,3 +21,10 @@ CHHAYA_BACKUP_S3=s3://chhaya-backup-803874683069-ap-south-1/backups
 # ~/.chhaya/gateway/cost-reported.json. If this line is new on a running box, install it with
 # `crontab deploy/crontab.box` (box-setup.sh --cron does too).
 */10 * * * * cd /home/ubuntu/chhaya && go build -o bin/chhayactl ./cmd/chhayactl && bin/chhayactl cost report -send -q >> /home/ubuntu/.chhaya/backups/cost.log 2>&1
+
+# The deterministic checks over every session, 5 minutes after the export has uploaded them. Checks
+# the IST day that just ended and the new one (the box clock is UTC, so at 20:50 it is 02:20 IST).
+# The bucket's copy is read, not a local one. The report goes to check.log; `fail` lines mean an
+# invariant broke, `flag` lines mean read the trace. Not yet sent to Telegram (docs/backlog.md).
+# `%` must be escaped in a crontab. docs/observability-and-evals.md, "Code checks".
+50 20 * * * cd /home/ubuntu/chhaya && for d in $(TZ=Asia/Kolkata date -d yesterday +\%F) $(TZ=Asia/Kolkata date +\%F); do echo "== $d"; bin/chhayactl trace check -s3 s3://chhaya-backup-803874683069-ap-south-1/evals -day $d; done >> /home/ubuntu/.chhaya/backups/check.log 2>&1

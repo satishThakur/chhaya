@@ -41,3 +41,11 @@ Today one model serves everything (`model.default` in `hermes/config.yaml`, from
 ## Cost from Hermes hooks instead of cron (asked 2026-11-15; answer: possible, not better yet)
 
 Hermes has plugin hooks (`on_session_end` per turn, `on_session_finalize`, `on_session_reset`, `post_api_request` with per-call `usage`) and shell hooks and outbound webhooks configured in `config.yaml`. Why the cron stays: (1) a session that is only abandoned never fires a hook, since our idle reset runs on the next message; the cron's quiet-for-35-minutes rule sees it; (2) a hook runs inside the Hermes container, which must not hold the approver bot token, so it would have to call the gateway, and a bill the agent's own process sends is one it could suppress. What hooks would add: `post_api_request` gives per-call usage, which is the way to see cache hits per call and to enforce a per-session spend cap. Revisit when a cap is wanted. The same payload shows `api_mode: "anthropic_messages"`: Hermes has a native Anthropic mode, and our config uses `transport: chat_completions`. That is the first thing to try for prompt caching.
+
+## Send the nightly check results to Telegram (asked 2026-11-16)
+
+`trace check` now runs nightly into `~/.chhaya/backups/check.log` on the box, so a `fail` is only seen if someone reads the log. The cost report already sends from the approver bot; do the same for a summary line ("9 traces, 2 flags, 0 fails") plus any `fail`. Needs the check's `-json` output and a send path in `chhayactl`; not built.
+
+## Dreaming pipeline: nightly memory extractor (design only, asked 2026-11-16)
+
+Design in `docs/dreaming.md`. Blocked on: a baseline from the nightly checks, a smaller trace-replay eval runner, and a second gateway client (`dreamer`) with its own policy.
