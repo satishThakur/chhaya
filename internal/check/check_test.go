@@ -312,3 +312,55 @@ func TestNotResetFlagsAConversationThatBeganWithYouAfterALongSilence(t *testing.
 	cron.SessionID, cron.Segment, cron.Segments, cron.GapBeforeMinutes = "s1", 2, 2, 240
 	wantN(t, "session.not_reset", cron, 0)
 }
+
+// ---- 2026-11-16: the checks written from the podcast trace ------------------------
+
+func TestOwnerCorrectionFiresOnWhatWentWrongToday(t *testing.T) {
+	a := msg(1, "assistant", "Try Swami Sarvapriyananda.")
+	for _, said := range []string{
+		"I have heard his drig drishya viveka series and a couple of others already.",
+		"this is also done :)",
+		"i mean i have already heard Osho’s astavakra geet",
+		"[Replying to: \"Try Osho's lectures\"]\n\nthis is also done :)", // the Telegram reply-quote is not the owner's words
+	} {
+		wantN(t, "reply.owner_correction", tg(msg(0, "user", "suggest a podcast"), a, msg(2, "user", said)), 1)
+	}
+}
+
+func TestOwnerCorrectionStaysQuiet(t *testing.T) {
+	a := msg(1, "assistant", "Try X.")
+	// a decision, not a correction
+	wantN(t, "reply.owner_correction", tg(msg(0, "user", "suggest"), a, msg(2, "user", "no it will increase the token usage, leave it")), 0)
+	// the cue is in the quoted reply, not in what the owner wrote
+	wantN(t, "reply.owner_correction", tg(msg(0, "user", "suggest"), a, msg(2, "user", "[Replying to: \"you have already heard it\"]\n\nthanks")), 0)
+	// the first message has no reply before it to correct
+	wantN(t, "reply.owner_correction", tg(msg(0, "user", "I have already heard everything")), 0)
+	// injected messages are not the owner
+	wantN(t, "reply.owner_correction", tg(msg(0, "user", "x"), a, msg(2, "user", "[Cron delivery: digest] I have already heard")), 0)
+}
+
+func TestRecommendWithoutSearch(t *testing.T) {
+	ask := msg(0, "user", "suggest one podcast for the evening - going back from office to home")
+	reply := msg(1, "assistant", "Try X.")
+	wantN(t, "recommend.unsearched", tg(ask, reply), 1)
+
+	searched := msg(1, "assistant", "")
+	searched.Calls = []trace.Call{call("c1", "web_search", `{"query":"podcast"}`)}
+	wantN(t, "recommend.unsearched", tg(ask, searched, msg(2, "tool", "r"), reply), 0)
+
+	// not a request for a recommendation
+	wantN(t, "recommend.unsearched", tg(msg(0, "user", "I finished the book yesterday"), reply), 0)
+	// the search belongs to its own turn: one in an earlier turn does not cover a later ask
+	wantN(t, "recommend.unsearched", tg(ask, searched, reply, msg(3, "user", "recommend a book"), msg(4, "assistant", "Try Y.")), 1)
+}
+
+func TestChatOnCheapModelAfterRouting(t *testing.T) {
+	tr := tg(msg(0, "user", "hi"))
+	tr.Model, tr.Day = "claude-haiku-5-5", "2026-11-17"
+	wantN(t, "routing.chat_model", tr, 1)
+	tr.Model = "claude-sonnet-5-5"
+	wantN(t, "routing.chat_model", tr, 0)
+	// before the routing change (decisions.md 2026-11-16) Haiku was the intended chat model
+	tr.Model, tr.Day = "claude-haiku-5-5", "2026-11-16"
+	wantN(t, "routing.chat_model", tr, 0)
+}

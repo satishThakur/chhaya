@@ -452,6 +452,9 @@ finding **and** on any trace it could not read: a check that did not run is not 
 | `session.not_reset` | flag | telegram | A conversation that began with a message you wrote after more than an hour of silence in the same session: a reset policy would have ended it. The check for whether the idle reset works |
 | `tools.surface` | info | all | Non-gateway tools used. Inventory only until there is an allow-list |
 | `ask.before_memory` | flag | telegram | A question asked with no memory call first. **Heuristic**: the question detector is crude and the question may not have needed memory |
+| `reply.owner_correction` | flag | telegram | You told the agent it was wrong or repeated yourself: a message that opens "I have (already) heard/read/done…", "I mean", "already", "this is also done", "that's wrong", "you forgot/missed…". The Telegram `[Replying to: …]` quote is skipped. A bare "no" is not matched (it is usually a decision). Needs an agent reply before it. Added 2026-11-16 from the podcast trace |
+| `recommend.unsearched` | flag | telegram | You asked to suggest/recommend/find a podcast, book, movie, show, song, album, course, article, video or restaurant and the turn made no `web_search`/`web_extract`. **Heuristic** on the wording of the request |
+| `routing.chat_model` | flag | telegram | A conversation on a Haiku model from 2026-11-17 on. Chat is routed to Sonnet (decisions.md 2026-11-16); this is the check that the routing took |
 
 Levels: `fail` is an invariant, `flag` means look, `info` is inventory. The level belongs to the check
 and a check cannot raise its own findings.
@@ -464,6 +467,11 @@ latency (reported as numbers only until there is a baseline); where results are 
 **Calibration comes next.** A check earns its place by agreeing with your annotations: one that never
 fires on traces you marked fail is a blind spot, one that fires on traces you marked pass is noise and
 is fixed or removed. That table needs annotated traces; none exist yet.
+
+**Nightly (2026-11-16).** `deploy/crontab.box` runs the checks at 02:20 IST (20:50 UTC) for the IST day
+that just ended and the new one, after the export, and appends to `~/.chhaya/backups/check.log` on the
+box. Until then no check ran on its own: they were a command someone had to remember. The log is not
+yet pushed to Telegram, so a `fail` is seen only by reading it.
 
 **First run (2026-11-12, 19 traces, 13 Telegram and 6 cron):** 0 integrity failures, 0 secrets,
 3 failures (2 unanswered messages, both real; one `cronjob_manage` called four times with the same

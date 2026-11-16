@@ -37,6 +37,12 @@ func All() []Check {
 			Doc: "Tools used that are not gateway tools. Inventory only until there is an allow-list."},
 		{Name: "ask.before_memory", Level: Flag, Applies: telegramOnly, Run: askBeforeMemory,
 			Doc: "The agent asked a question and had made no memory call. Heuristic: the question detector is crude and the question may not have needed memory."},
+		{Name: "reply.owner_correction", Level: Flag, Applies: telegramOnly, Run: ownerCorrection,
+			Doc: "You told the agent it was wrong or repeated something you had said (\"I have already heard…\", \"I mean…\"). Heuristic on how the message opens; a decision such as \"no, leave it\" is not matched."},
+		{Name: "recommend.unsearched", Level: Flag, Applies: telegramOnly, Run: recommendUnsearched,
+			Doc: "You asked for a suggestion (podcast, book, …) and the turn made no web search or extract. Heuristic on the wording of the request."},
+		{Name: "routing.chat_model", Level: Flag, Applies: telegramOnly, Run: chatModel,
+			Doc: "A chat conversation ran on a Haiku model after 2026-11-17. Chat is routed to Sonnet (decisions.md 2026-11-16); a miss means the routing did not take."},
 	}
 }
 
@@ -359,4 +365,67 @@ func clip(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// ---- the owner's own signals (2026-11-16) ------------------------------------------
+
+// replyQuote is the "[Replying to: "…"]" block Telegram puts before a message that replies to
+// another. It is the agent's own earlier words, not the owner's, so cues are read after it.
+var replyQuote = regexp.MustCompile(`(?s)^\[Replying to:.*?\]\n\n`)
+
+func ownerText(m trace.Message) string {
+	return strings.TrimSpace(replyQuote.ReplaceAllString(strings.TrimSpace(m.Content), ""))
+}
+
+var correctionCue = regexp.MustCompile(`(?i)^(i('ve| have)\s+(already\s+)?(heard|read|seen|done|tried|watched)|i mean\b|already\b|this is also done|that'?s (wrong|not)|not what i|you (forgot|missed|ignored|did not|didn'?t))`)
+
+func ownerCorrection(t *trace.Trace) []Finding {
+	var out []Finding
+	spoke := false // the agent has said something this conversation, so there is a reply to correct
+	for _, m := range t.Messages {
+		if m.Role == "assistant" && strings.TrimSpace(m.Content) != "" {
+			spoke = true
+		}
+		if spoke && isHuman(m) && correctionCue.MatchString(ownerText(m)) {
+			out = append(out, f(m.ID, "you corrected the agent: %q", clip(ownerText(m), 80)))
+		}
+	}
+	return out
+}
+
+var recommendAsk = regexp.MustCompile(`(?i)\b(suggest|recommend|find me|find a|find one|which|what)\b.*\b(podcasts?|books?|movies?|films?|shows?|songs?|albums?|courses?|articles?|videos?|restaurants?)\b`)
+
+func recommendUnsearched(t *trace.Trace) []Finding {
+	var out []Finding
+	ms := t.Messages
+	for i, m := range ms {
+		if !isHuman(m) || !recommendAsk.MatchString(ownerText(m)) {
+			continue
+		}
+		searched := false
+		for _, x := range ms[i+1:] {
+			if isHuman(x) {
+				break
+			}
+			for _, c := range x.Calls {
+				if c.Name == "web_search" || c.Name == "web_extract" {
+					searched = true
+				}
+			}
+		}
+		if !searched {
+			out = append(out, f(m.ID, "asked for a suggestion and the reply came without a web search"))
+		}
+	}
+	return out
+}
+
+// routingStarts is the first IST day on which chat is meant to be on Sonnet.
+const routingStarts = "2026-11-17"
+
+func chatModel(t *trace.Trace) []Finding {
+	if t.Day < routingStarts || !strings.Contains(strings.ToLower(t.Model), "haiku") {
+		return nil
+	}
+	return []Finding{f(0, "chat conversation ran on %s", t.Model)}
 }
