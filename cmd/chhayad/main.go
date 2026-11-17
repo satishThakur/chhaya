@@ -79,7 +79,7 @@ func run() error {
 	// Steps 3 and 4. The token must work and the chat must be reachable.
 	bot := approval.NewBot(
 		approval.NewHTTPTelegram(os.Getenv("CHHAYA_APPROVER_BOT_TOKEN"), nil),
-		chatID, st, w, cfg.ApprovalTimeout, cfg, memory.Store{Root: memoryRoot},
+		chatID, st, w, cfg.ApprovalTimeout, cfg, memory.Store{Root: memoryRoot, Commit: memory.GitCommit},
 	)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

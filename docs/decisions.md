@@ -829,3 +829,13 @@ second user or inbound access, or the bot naming convention stops being enforcea
 **Consequences.** First run against prod's memory: 20 facts with ids, 3 lines in `taste/food.md` with none (seed content from the M0b smoke test), so the check fails until the owner decides what happens to them. Probes were drafted by Sonnet, the same family as the agent they test; `memory-selftest.md` R1 wants a different model, which remains open. Not built: the runner that answers the probes with a weak model (S2), and the canary that runs the check nightly.
 
 **Reopen if:** a legitimate memory path starts with a dot, or the owner wants the tests kept outside the memory repo.
+
+## 2026-11-17: every approved memory write is its own git commit
+
+**Decision.** `ApplyApproved` appends the line, then commits that one document to the memory repo (`memory: add to <path> (proposal <id>)`, author `chhaya-gateway`), then files the proposal as applied. The commit is `memory.GitCommit`, set on the approver's store in `chhayad`; a `Store` with no `Commit` (unit tests) keeps no history. If the commit fails the proposal stays pending, the card says "not written", the audit log records the error, and the owner's second tap retries without writing the line twice. The gateway image now carries `git`. The commit takes only the written document, runs git with no system or global config, no hooks and no signing, and does nothing when there is nothing new to commit.
+
+**Why.** Before this the memory repo held only occasional `snapshot:` commits (four between Nov 8 and Nov 11), so "revert the last write" would have undone whatever had accumulated since. The dreaming design (`docs/dreaming.md`) rolls memory back with `git revert` and attributes a bad answer to a recent commit; both need one commit per write. A failed commit blocks the write's completion rather than being logged and ignored, because history with silent gaps is the failure this exists to remove.
+
+**Consequences.** The first commit after deploy also takes any approved lines that were never committed in the same document. `scripts/dev.sh` snapshots still run and now usually find nothing to commit. Hooks in the memory repo never run. A box whose memory root is not a git repo can no longer complete approvals; that is the fail-closed choice and the error says why. Not covered: edits made by hand (like the 2026-11-17 seed-line removal) are still committed by whoever makes them.
+
+**Reopen if:** commit failures become a nuisance (then retry in the background and alert, but never mark applied without the commit), or memory moves out of git.

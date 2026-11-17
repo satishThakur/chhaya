@@ -7,7 +7,8 @@ RUN CGO_ENABLED=0 go build -o /out/chhayad ./cmd/chhayad \
  && CGO_ENABLED=0 go build -o /out/chhayactl ./cmd/chhayactl
 
 FROM alpine:3.21
-RUN adduser -D -u 10001 chhaya
+# git: every approved memory write is committed to the memory repo (internal/memory/gitcommit.go).
+RUN apk add --no-cache git && adduser -D -u 10001 chhaya
 # /data must exist in the image, owned by the uid the container runs as.
 # Docker seeds a new named volume from the image's directory — including its
 # ownership — but only if that directory is there. Without this, the volume is

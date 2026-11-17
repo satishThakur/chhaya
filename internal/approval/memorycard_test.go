@@ -331,8 +331,9 @@ func TestOnlyTheTapHandlerApplies(t *testing.T) {
 	// path (relative to the module root) → the only function in it that may
 	// call ApplyApproved. An empty function name means the whole file may.
 	allowed := map[string]string{
-		"internal/approval/memorycard.go": "memoryTap",
-		"internal/memory/memory_test.go":  "", // unit-tests ApplyApproved itself
+		"internal/approval/memorycard.go":   "memoryTap",
+		"internal/memory/memory_test.go":    "", // unit-tests ApplyApproved itself
+		"internal/memory/gitcommit_test.go": "", // unit-tests ApplyApproved's commit step
 	}
 
 	var parsed int
