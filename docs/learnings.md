@@ -146,3 +146,11 @@ records its predecessor as its parent.
 it searches without being asked, which matters for replies to the digest.
 
 **Still open.** Watch for conversations that open with an implicit reference during annotation.
+
+## 2026-11-17: a new file in `internal/memory/` was silently left out of a commit, and the redeploy took prod down
+
+**What happened.** `.gitignore` had `memory/` to keep personal memory out of this public repo. Unanchored, it also matches `internal/memory/`. `memory.go` was tracked from before, so nothing looked wrong, but `git add -A` skipped the two new files there. `go test` passed locally because the files were on disk, and the merge went to `main`. On the box the gateway image build failed with `undefined: memory.GitCommit`. `dev.sh restart` stops the stack before it builds, so prod was down for a few minutes until the fix was pushed.
+
+**What we found.** (1) `git status` after `git add -A` showed the files absent, and nobody read it. `git check-ignore -v <file>` names the rule. (2) A green local test says nothing about what was committed.
+
+**Changes.** The ignore is now `/memory/` (repo root only). `restart` builds first and leaves the running stack alone if the build fails. Before merging a change that adds files, run `git status --short` after `git add -A` and look for the new files in it.
