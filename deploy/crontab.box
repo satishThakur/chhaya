@@ -34,3 +34,10 @@ CHHAYA_BACKUP_S3=s3://chhaya-backup-803874683069-ap-south-1/backups
 # Runs no model. The probes and golden set live in ~/.chhaya/gateway/memory/.tests (the memory
 # repo, never this one). docs/decisions.md 2026-11-16; docs/dreaming.md, the canary.
 55 20 * * * cd /home/ubuntu/chhaya && bin/chhayactl memtest check -memory /home/ubuntu/.chhaya/gateway/memory >> /home/ubuntu/.chhaya/backups/memtest.log 2>&1
+
+# The memory canary: a small model answers every probe and golden question using only the memory
+# tools, against a copy of memory. A `MISS` (a fact's line never reached the model) or a golden
+# `FAIL` makes the run exit non-zero; the log is memrun.log. About 2.5 minutes and a few cents a
+# night (Haiku answers, Sonnet judges; the judge's WRONG lines are informational). Needs
+# PROXY_API_KEY in deploy/.env.hermes, which the box already has. docs/decisions.md 2026-11-17.
+0 21 * * * cd /home/ubuntu/chhaya && bin/chhayactl memtest run -memory /home/ubuntu/.chhaya/gateway/memory -env-file deploy/.env.hermes >> /home/ubuntu/.chhaya/backups/memrun.log 2>&1

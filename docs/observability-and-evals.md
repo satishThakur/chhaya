@@ -487,3 +487,20 @@ Telegram traces. These are findings to read, not a score.
 - **Cron sessions** appear as traces too (source `cron`), with long ids; they are in the list.
 - **`evals/` lifecycle:** fixed in Terraform, applied by the owner before the first Export (see open questions).
 - **The mode field is free text** until `modes.yaml` exists (step 2).
+
+
+## Memory tests (`chhayactl memtest`)
+
+Not about sessions: about whether Personal memory still answers what it should. Probes and golden
+questions live in the memory repo under `.tests/` on the box (never in this repo); design in
+`docs/memory-selftest.md` and `docs/dreaming.md`, decisions 2026-11-16 and 2026-11-17.
+
+- `memtest check` reads the files, no model. Fails on a fact line with no proposal id, an id on two lines,
+  a probe about a fact that is not in memory, a malformed probe or golden question. Warns on a fact with no
+  probe. Runs nightly (`deploy/crontab.box`, log `memtest.log`).
+- `memtest run` asks the questions with a weak model that has only `memory_list` and `memory_get`, against
+  a copy of memory. **Gates:** a probe whose fact line never reached the model (`MISS`), a golden question
+  that fails and is not `pending` (`FAIL`). **Reported, does not gate:** the judge's `WRONG`, until it has
+  been compared with the owner's reading. Also prints model calls, tool calls and tokens per run.
+- Golden questions say what the answer must contain (`expect_all`) and must not contain (`expect_none`),
+  case-insensitive. `pending: true` marks one known to fail until a fact exists.

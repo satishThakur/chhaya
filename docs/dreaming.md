@@ -142,7 +142,9 @@ the rest is feature work and needs the owner to lift it.
 1. **The memory tests:** probes and a golden set, starting from the podcast case, in a location the
    dreamer cannot write.
 2. **The gates as code**, and the canary that runs them against live memory nightly. No agent needed:
-   this alone catches a bad edit made by any route.
+   this alone catches a bad edit made by any route. *Started 2026-11-17:* `memtest check` (structure) and
+   `memtest run` (a weak model answers every probe and golden question) exist; the nightly run on the box,
+   the survival and shape gates, and the revert are not built.
 3. **A replay harness** that runs a fixed trace through the extractor and checks its proposals against
    a fixture. Dreaming never needs a live Hermes, so it does not wait for the Hermes replay spike.
 4. **The `dreamer` client and its policy**, with the blocked-case tests.
