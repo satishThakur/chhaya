@@ -54,7 +54,10 @@ type Golden struct {
 	ExpectNone []string `json:"expect_none,omitempty"`
 	Source     string   `json:"source,omitempty"`
 	HeldOut    bool     `json:"held_out,omitempty"`
-	Note       string   `json:"note,omitempty"`
+	// Pending marks a question known to fail until something outside the question is done (a fact
+	// still to be proposed and approved). The runner reports it and does not count it as a failure.
+	Pending bool   `json:"pending,omitempty"`
+	Note    string `json:"note,omitempty"`
 }
 
 // Problem is one thing wrong: Level "fail" is an invariant, "warn" is a gap to fill.

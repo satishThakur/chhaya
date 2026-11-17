@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/satishthakur/chhaya/internal/memrun"
 	"io/fs"
 	"net"
 	"net/http"
@@ -455,5 +456,60 @@ func TestMemtestCheckReportsAndFailsOnABrokenFact(t *testing.T) {
 	}
 	if err := runMemtest([]string{"nonsense"}, &out); err == nil {
 		t.Fatal("an unknown subcommand must be an error")
+	}
+}
+
+type fakeMemModel struct{ replies []memrun.Message }
+
+func (f *fakeMemModel) Chat(_ context.Context, _ []memrun.Message, _ []memrun.ToolDef) (memrun.Message, memrun.Usage, error) {
+	r := f.replies[0]
+	if len(f.replies) > 1 {
+		f.replies = f.replies[1:]
+	}
+	return r, memrun.Usage{In: 50, Out: 5}, nil
+}
+
+func TestMemtestRunFailsWhenAFactIsNeverRetrieved(t *testing.T) {
+	root := t.TempDir()
+	id := "20261106-3f609264ada59fd2"
+	os.WriteFile(filepath.Join(root, "interests.md"), []byte("# Interests\n\n- Loves books. <!-- proposal "+id+", approved 2026-11-06 -->\n"), 0o644)
+	os.MkdirAll(filepath.Join(root, ".tests"), 0o755)
+	os.WriteFile(filepath.Join(root, ".tests", "probes.json"), []byte(`[{"id":"p1","fact":"`+id+`","kind":"direct","question":"What does the owner love?","expected":"books"}]`), 0o644)
+	envf := filepath.Join(t.TempDir(), "env")
+	os.WriteFile(envf, []byte("PROXY_API_KEY=sk-test-key\nCHHAYA_HERMES_API_BASE=http://example.invalid/v1\n"), 0o600)
+
+	var out bytes.Buffer
+	newMemModel = func(base, key, model string) memrun.Model {
+		if key != "sk-test-key" || base != "http://example.invalid/v1" {
+			t.Errorf("model built with key=%q base=%q", key, base)
+		}
+		return &fakeMemModel{replies: []memrun.Message{{Role: "assistant", Content: "Probably books."}}} // never reads memory
+	}
+	err := runMemtest([]string{"run", "-memory", root, "-env-file", envf, "-judge=false"}, &out)
+	if err == nil || !strings.Contains(out.String(), "MISS") {
+		t.Fatalf("a guess is not a retrieval; want a failure naming MISS:\n%s\n%v", out.String(), err)
+	}
+	if strings.Contains(out.String(), "sk-test-key") {
+		t.Fatal("the key was printed")
+	}
+
+	newMemModel = func(string, string, string) memrun.Model {
+		return &fakeMemModel{replies: []memrun.Message{
+			{Role: "assistant", ToolCalls: []memrun.ToolCall{{ID: "c", Name: "memory_get", Args: `{"path":"interests"}`}}},
+			{Role: "assistant", Content: "Books."}}}
+	}
+	out.Reset()
+	if err := runMemtest([]string{"run", "-memory", root, "-env-file", envf, "-judge=false"}, &out); err != nil {
+		t.Fatalf("reading the document is a retrieval: %v\n%s", err, out.String())
+	}
+}
+
+func TestMemtestRunNeedsAKey(t *testing.T) {
+	envf := filepath.Join(t.TempDir(), "env")
+	os.WriteFile(envf, []byte("CHHAYA_HERMES_API_BASE=http://x/v1\n"), 0o600)
+	t.Setenv("PROXY_API_KEY", "")
+	var out bytes.Buffer
+	if err := runMemtest([]string{"run", "-memory", t.TempDir(), "-env-file", envf}, &out); err == nil || !strings.Contains(err.Error(), "PROXY_API_KEY") {
+		t.Fatalf("want an error naming PROXY_API_KEY, got %v", err)
 	}
 }
