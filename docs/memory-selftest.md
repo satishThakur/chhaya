@@ -1,6 +1,6 @@
 # Feature request: self-testing Personal memory
 
-**Asked:** 2026-11-11, by the owner. **Status:** requested, not started. Feature work is frozen
+**Asked:** 2026-11-11, by the owner. **Status:** requested; S0 started 2026-11-16 (probe store, golden set, `chhayactl memtest check`; see `dreaming.md`). Feature work is frozen
 (`decisions.md`, 2026-11-08) except deployment and measurement and eval tooling, so this document
 says which parts count as measurement and which have to wait. The requirements as submitted are
 kept verbatim in the appendix; the R-numbers used here are theirs.

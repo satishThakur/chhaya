@@ -432,3 +432,28 @@ func TestTraceCheckJSONIsParseable(t *testing.T) {
 		t.Errorf("report = %+v", rep)
 	}
 }
+
+func TestMemtestCheckReportsAndFailsOnABrokenFact(t *testing.T) {
+	root := t.TempDir()
+	good := "# Interests\n\n- Loves books. <!-- proposal 20261106-3f609264ada59fd2, approved 2026-11-06 -->\n"
+	if err := os.WriteFile(filepath.Join(root, "interests.md"), []byte(good), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runMemtest([]string{"check", "-memory", root}, &out); err != nil {
+		t.Fatalf("a clean memory must pass: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "1 fact(s)") || !strings.Contains(out.String(), "warn") {
+		t.Fatalf("want a count and a no-probe warning:\n%s", out.String())
+	}
+	if err := os.WriteFile(filepath.Join(root, "location.md"), []byte("# Location\n\n- Lives in Pune.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := runMemtest([]string{"check", "-memory", root}, &out); err == nil || !strings.Contains(out.String(), "fail") {
+		t.Fatalf("a line with no id must fail:\n%s", out.String())
+	}
+	if err := runMemtest([]string{"nonsense"}, &out); err == nil {
+		t.Fatal("an unknown subcommand must be an error")
+	}
+}
