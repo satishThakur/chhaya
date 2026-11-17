@@ -337,7 +337,12 @@ NEXT
 }
 
 cmd_down()    { "${COMPOSE[@]}" down; }
-cmd_restart() { cmd_down; cmd_up; }
+# Build first, stop second: a build that fails (it did on 2026-11-17) must leave the running
+# stack up, not take it down and then fail to bring it back.
+cmd_restart() {
+  "${COMPOSE[@]}" build || die "build failed — the running stack was left up"
+  cmd_down; cmd_up
+}
 cmd_logs()    { "${COMPOSE[@]}" logs -f --tail=80 "$@"; }
 
 cmd_status() {
