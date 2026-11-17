@@ -17,7 +17,7 @@ deploy/.hermes-config.rendered.yaml
 # Personal memory is DATA and lives outside the repo (~/.chhaya/gateway/memory, its
 # own local git repo). This repo is public: anything under memory/ must never be
 # committed, so a stray one is ignored outright. memory.example/ is the generic seed.
-memory/
+/memory/
 audit/*.log
 audit/*.jsonl
 *.db
