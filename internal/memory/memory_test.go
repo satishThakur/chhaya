@@ -604,3 +604,23 @@ func TestExistingProposalDirectoriesKeepTheirMode(t *testing.T) {
 		}
 	}
 }
+
+// The memory tests (probes, golden set) live in a dot-directory of the memory root, and so do
+// staged proposals. The memory tools must never read or write there: the agent being tested
+// must not be able to see the answers, whatever the file extension happens to be.
+func TestResolveRefusesDotDirectories(t *testing.T) {
+	root := t.TempDir()
+	for _, d := range []string{".tests", ".proposals", "taste"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, rel := range []string{".tests/golden", ".tests/probes", ".proposals/applied/x", "taste/.hidden", ".git/config", "./.tests/golden", "taste/../.tests/golden"} {
+		if p, err := Resolve(root, rel); err == nil {
+			t.Errorf("Resolve(%q) = %s, want a refusal", rel, p)
+		}
+	}
+	if _, err := Resolve(root, "taste/food"); err != nil {
+		t.Errorf("an ordinary path must still resolve: %v", err)
+	}
+}

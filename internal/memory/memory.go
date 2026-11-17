@@ -50,6 +50,16 @@ func Resolve(root, rel string) (string, error) {
 		return "", fmt.Errorf("path %q is outside the memory root", rel)
 	}
 
+	// Dot-directories are not memory: .git, .proposals (staged, unapproved) and .tests (the
+	// probes and golden set the agent is judged by). The tools may not read or write them, so
+	// the agent under test cannot see the answers. Checked on the cleaned path, so ./.tests and
+	// taste/../.tests are caught too.
+	for _, part := range strings.Split(clean, string(os.PathSeparator)) {
+		if strings.HasPrefix(part, ".") {
+			return "", fmt.Errorf("path %q: names starting with \".\" are not memory", rel)
+		}
+	}
+
 	p := filepath.Join(absRoot, clean+".md")
 
 	// The parent must exist and resolve inside the root. Resolving only the

@@ -819,3 +819,13 @@ second user or inbound access, or the bot naming convention stops being enforcea
 **Consequences.** CLAUDE.md's non-negotiable "never edit Personal memory directly; only `memory.propose_update`" gains one exception, the gateway merging a gated lossless branch. It is amended when that lands (build step 5), not now. New gateway work: a `dreamer` client with its own policy and blocked-case tests. Auto-applying additions is a separate later decision and would need a veto window. Building the tests, gates and canary (steps 1 to 3) fits the 2026-11-08 freeze; the rest needs the owner to lift it.
 
 **Reopen if:** the approval rate on batched fact proposals is high and steady (then auto-apply with a veto window), the tests prove too weak to catch a bad reorganization (then the lossless tier needs a tap too), or the owner's own signals start to carry enough data to drive a rollback.
+
+## 2026-11-16: the memory tests live in `<memory root>/.tests/`, and the memory tools cannot open dot-directories
+
+**Decision.** Probes (`probes.json`) and the golden set (`golden.json`) live in the memory repo under `.tests/`: versioned and backed up with the memory, never in the public repo (a test fails if a tracked file looks like test data). `internal/memtest` checks them without a model: a fact line with no proposal id, an id on two lines, a probe about a fact that is not in memory, a malformed probe or golden question all fail; a fact with no probe is a warning. `chhayactl memtest check` runs it. `memory.Resolve` now refuses any path component starting with ".", so `memory.get` cannot read `.tests`, `.proposals` or `.git`.
+
+**Why.** An agent that can read its own answers cannot be tested by them. Before this the only thing keeping `.tests/x` unreadable would have been the `.md` suffix `Resolve` appends: a file named `.tests/x.md` was readable (test `TestResolveRefusesDotDirectories` failed on the old code). Golden questions can also forbid phrases (`expect_none`), because the podcast failure is a recommendation that repeats what the owner already heard, not a missing answer.
+
+**Consequences.** First run against prod's memory: 20 facts with ids, 3 lines in `taste/food.md` with none (seed content from the M0b smoke test), so the check fails until the owner decides what happens to them. Probes were drafted by Sonnet, the same family as the agent they test; `memory-selftest.md` R1 wants a different model, which remains open. Not built: the runner that answers the probes with a weak model (S2), and the canary that runs the check nightly.
+
+**Reopen if:** a legitimate memory path starts with a dot, or the owner wants the tests kept outside the memory repo.
