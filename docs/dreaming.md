@@ -137,6 +137,8 @@ the weeks after it starts. That needs a baseline from the nightly checks first.
 Steps 1 to 3 are eval and measurement tooling and fit the feature freeze (`decisions.md`, 2026-11-08);
 the rest is feature work and needs the owner to lift it.
 
+0. **One commit per approved write** (done 2026-11-17, `decisions.md`). Every rollback and attribution below
+   rests on it: before, memory had only occasional snapshots.
 1. **The memory tests:** probes and a golden set, starting from the podcast case, in a location the
    dreamer cannot write.
 2. **The gates as code**, and the canary that runs them against live memory nightly. No agent needed:

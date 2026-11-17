@@ -122,7 +122,14 @@ type Proposal struct {
 }
 
 // Store is the proposal queue under <Root>/.proposals.
-type Store struct{ Root string }
+type Store struct {
+	Root string
+	// Commit, when set, is called after an approved line is written and before the proposal is
+	// filed as applied: root, the document written, and a message. If it fails the proposal stays
+	// pending and the approver says "not written", so a second tap retries without writing the
+	// line twice. The gateway sets it to GitCommit; nil means no history is kept (unit tests).
+	Commit func(root, doc, message string) error
+}
 
 var idPattern = regexp.MustCompile(`^\d{8}-[0-9a-f]{16}$`)
 
@@ -293,6 +300,11 @@ func (s Store) ApplyApproved(id string, now time.Time) (Proposal, error) {
 	}
 	if err := appendEntry(doc, id, entry, now); err != nil {
 		return Proposal{}, err
+	}
+	if s.Commit != nil {
+		if err := s.Commit(s.Root, doc, fmt.Sprintf("memory: add to %s (proposal %s)", p.Path, id)); err != nil {
+			return Proposal{}, fmt.Errorf("written to %s but not committed: %w", p.Path, err)
+		}
 	}
 	return s.move(id, p, "applied", "approved", now)
 }
