@@ -504,3 +504,12 @@ questions live in the memory repo under `.tests/` on the box (never in this repo
   been compared with the owner's reading. Also prints model calls, tool calls and tokens per run.
 - Golden questions say what the answer must contain (`expect_all`) and must not contain (`expect_none`),
   case-insensitive. `pending: true` marks one known to fail until a fact exists.
+
+## The morning report (`chhayactl report nightly`)
+
+07:30 IST, from `deploy/crontab.box`, log `report.log`. Sends one Telegram message from the approver bot:
+a headline, trace counts by check name, the memory tests and the canary, and a presigned link to
+`s3://BUCKET/evals/reports/DAY.html`. The message has no message text. The page has each flagged finding,
+the canary's MISS/WRONG/FAIL rows and token totals. A canary result older than 26 hours, a missing one
+or an unreadable trace is FAILED. The link lasts about 6 hours (role credentials). Run it by hand, without
+`-send`, to see the message: `bin/chhayactl report nightly -s3 s3://.../evals`.

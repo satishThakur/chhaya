@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/satishthakur/chhaya/internal/memrun"
+	"github.com/satishthakur/chhaya/internal/nightly"
 	"io/fs"
 	"net"
 	"net/http"
@@ -511,5 +512,67 @@ func TestMemtestRunNeedsAKey(t *testing.T) {
 	var out bytes.Buffer
 	if err := runMemtest([]string{"run", "-memory", t.TempDir(), "-env-file", envf}, &out); err == nil || !strings.Contains(err.Error(), "PROXY_API_KEY") {
 		t.Fatalf("want an error naming PROXY_API_KEY, got %v", err)
+	}
+}
+
+type nightSender struct{ got []string }
+
+func (r *nightSender) Send(_ context.Context, s string) error { r.got = append(r.got, s); return nil }
+
+func TestMemtestRunWritesJSONEvenWhenTheGateFails(t *testing.T) {
+	root := t.TempDir()
+	id := "20261106-3f609264ada59fd2"
+	os.WriteFile(filepath.Join(root, "interests.md"), []byte("# Interests\n\n- Loves books. <!-- proposal "+id+", approved 2026-11-06 -->\n"), 0o644)
+	os.MkdirAll(filepath.Join(root, ".tests"), 0o755)
+	os.WriteFile(filepath.Join(root, ".tests", "probes.json"), []byte(`[{"id":"p1","fact":"`+id+`","kind":"direct","question":"What?","expected":"books"}]`), 0o644)
+	envf := filepath.Join(t.TempDir(), "env")
+	os.WriteFile(envf, []byte("PROXY_API_KEY=k\nCHHAYA_HERMES_API_BASE=http://x/v1\n"), 0o600)
+	newMemModel = func(string, string, string) memrun.Model {
+		return &fakeMemModel{replies: []memrun.Message{{Role: "assistant", Content: "guess"}}}
+	}
+	jp := filepath.Join(t.TempDir(), "memrun.json")
+	var out bytes.Buffer
+	if err := runMemtest([]string{"run", "-memory", root, "-env-file", envf, "-judge=false", "-json", jp}, &out); err == nil {
+		t.Fatal("the gate should have failed")
+	}
+	rf, err := nightly.ReadRunFile(jp)
+	if err != nil || rf.Result.Gate() != 1 {
+		t.Fatalf("a failing night must still leave its result for the report: %+v %v", rf, err)
+	}
+}
+
+func TestReportNightlyPrintsSendsAndNeverLeaksText(t *testing.T) {
+	evals := t.TempDir()
+	day := time.Date(2026, 11, 18, 2, 0, 0, 0, time.UTC)
+	tr := `{"schema":2,"id":"t1","day":"2026-11-18","source":"telegram","started":"2026-11-18T01:00:00Z","last_message":"2026-11-18T01:05:00Z","messages":[` +
+		`{"id":1,"role":"user","time":"2026-11-18T01:00:00Z","content":"suggest a podcast about SECRETWORD"},` +
+		`{"id":2,"role":"assistant","time":"2026-11-18T01:00:05Z","content":"Try Sarvapriyananda."}]}`
+	os.MkdirAll(filepath.Join(evals, "days", "2026-11-18"), 0o755)
+	os.WriteFile(filepath.Join(evals, "days", "2026-11-18", "trace-t1.json"), []byte(tr), 0o644)
+	mem := t.TempDir()
+	os.WriteFile(filepath.Join(mem, "i.md"), []byte("# I\n\n- Loves books. <!-- proposal 20261106-3f609264ada59fd2, approved 2026-11-06 -->\n"), 0o644)
+	rj := filepath.Join(t.TempDir(), "memrun.json")
+	nightly.WriteRunFile(rj, nightly.RunFile{RanAt: day.Add(-5 * time.Hour), Model: "m"})
+	envf := filepath.Join(t.TempDir(), "env")
+	os.WriteFile(envf, []byte("CHHAYA_APPROVER_BOT_TOKEN=tok-secret\nCHHAYA_APPROVER_ALLOWED_USERS=42\n"), 0o600)
+
+	rec := &nightSender{}
+	d := reportDeps{now: func() time.Time { return day },
+		run:    func(string, ...string) ([]byte, error) { return nil, errors.New("no aws here") },
+		sender: func(tok string, chat int64) nightly.Sender { return rec }}
+	var out bytes.Buffer
+	err := runReport([]string{"report-ignored"}, &out, d)
+	if err == nil {
+		t.Fatal("a bad subcommand must be an error")
+	}
+	out.Reset()
+	if err := runReport([]string{"nightly", "-dir", evals, "-memory", mem, "-run-json", rj, "-env", envf, "-send"}, &out, d); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if len(rec.got) != 1 || !strings.Contains(rec.got[0], "traces: 1 checked") {
+		t.Fatalf("sent %v", rec.got)
+	}
+	if strings.Contains(rec.got[0]+out.String(), "SECRETWORD") || strings.Contains(out.String(), "tok-secret") {
+		t.Fatal("message text or the bot token leaked")
 	}
 }

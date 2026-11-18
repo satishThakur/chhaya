@@ -849,3 +849,13 @@ second user or inbound access, or the bot naming convention stops being enforcea
 **Consequences.** A run costs a few cents (about 90k tokens in for 30 questions on Haiku, plus the judge). The API rejects `temperature` for current models, so runs are not deterministic: the same probe can pass once and miss once; run it several times before trusting a single MISS (a `-k` flag is not built). Three questions in a row that cannot reach the model end a run. The tool descriptions the model sees are not the gateway's exact text (underscores for dots). What it does not measure is the live agent's behaviour: whether it calls memory before asking is the `ask.before_memory` check.
 
 **Reopen if:** a MISS turns out to be noise more often than not (then require 2 of 3), or the judge and the owner agree on a month of verdicts (then let WRONG gate).
+
+## 2026-11-18: a morning report to Telegram, with the detail on a presigned S3 page
+
+**Decision.** `chhayactl report nightly` runs at 07:30 IST (`deploy/crontab.box`). It re-runs the trace checks over yesterday and today, runs the memory tests, reads the canary's `memrun.json` (`memtest run -json`), uploads an HTML page to `s3://BUCKET/evals/reports/DAY.html`, and the approver bot sends one message: a headline (all clear / read the report / FAILED), counts, check names and a presigned link. The message never holds a finding's text; the page does, HTML-escaped, in the private bucket. A part that did not run (no `memrun.json`, one older than 26 hours, memory tests unreadable) is FAILED, not a pass. A clean night still sends one line, so no message at all means the job broke. The judge's WRONG count is shown and never changes the headline.
+
+**Why.** The nightly checks wrote to log files nobody reads; a failure that does not reach the owner is not an eval. 07:30 and not 02:30 because the box signs with an instance role, so the link dies when its credentials rotate (about 6 hours); at 02:30 it would be dead by breakfast.
+
+**Consequences.** `memtest run` writes its result file even when it fails, since a failing night is the one the report most needs. An upload or presign failure is returned but the message still goes, saying the report is missing. Not built: a Telegram button to open an old report (the link is short-lived by design; the page can be re-presigned by running the command again).
+
+**Reopen if:** the 6-hour link is a nuisance (then a small IAM user for presigning, which puts a secret on the box), or the clean-night line becomes noise.

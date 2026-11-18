@@ -51,6 +51,8 @@ func main() {
 		err = runTrace(args[1:], os.Stdout, realTraceDeps())
 	case "memtest":
 		err = runMemtest(args[1:], os.Stdout)
+	case "report":
+		err = runReport(args[1:], os.Stdout, realReportDeps())
 	case "cost":
 		err = runCost(args[1:], os.Stdout, realCostDeps())
 	case "botcheck":
@@ -87,6 +89,7 @@ func usage() {
   backup           create | verify | restore | push | pull | status (chhayactl backup for detail)
   trace            export | serve: per-session traces and the annotation page (chhayactl trace for detail)
   memtest check    the memory's own tests: ids, probes, golden set (chhayactl memtest for detail)
+  report nightly   the morning report: checks + memory tests + canary, to Telegram with an HTML link
   cost report      price each session from its tokens; -send tells you on Telegram (chhayactl cost for detail)
   botcheck         confirm both bot tokens belong to this CHHAYA_ENV (calls Telegram getMe)
   policy explain   print the values the gateway is enforcing

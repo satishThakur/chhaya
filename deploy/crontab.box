@@ -40,4 +40,12 @@ CHHAYA_BACKUP_S3=s3://chhaya-backup-803874683069-ap-south-1/backups
 # `FAIL` makes the run exit non-zero; the log is memrun.log. About 2.5 minutes and a few cents a
 # night (Haiku answers, Sonnet judges; the judge's WRONG lines are informational). Needs
 # PROXY_API_KEY in deploy/.env.hermes, which the box already has. docs/decisions.md 2026-11-17.
-0 21 * * * cd /home/ubuntu/chhaya && bin/chhayactl memtest run -memory /home/ubuntu/.chhaya/gateway/memory -env-file deploy/.env.hermes >> /home/ubuntu/.chhaya/backups/memrun.log 2>&1
+0 21 * * * cd /home/ubuntu/chhaya && bin/chhayactl memtest run -memory /home/ubuntu/.chhaya/gateway/memory -env-file deploy/.env.hermes -json /home/ubuntu/.chhaya/backups/memrun.json >> /home/ubuntu/.chhaya/backups/memrun.log 2>&1
+
+# The morning report, 07:30 IST = 02:00 UTC: re-runs the trace checks over yesterday and today, the
+# memory tests, reads the canary's memrun.json, uploads an HTML report to
+# s3://BUCKET/evals/reports/DAY.html and sends you one Telegram message (counts and check names,
+# never message text) with a presigned link. The link is signed with the box's role credentials, so
+# it lasts about 6 hours: that is why this is the morning, not 02:30. A night with no message at all
+# means this job broke. A canary result older than 26 hours shows as FAILED. docs/decisions.md 2026-11-18.
+0 2 * * * cd /home/ubuntu/chhaya && go build -o bin/chhayactl ./cmd/chhayactl && bin/chhayactl report nightly -s3 s3://chhaya-backup-803874683069-ap-south-1/evals -memory /home/ubuntu/.chhaya/gateway/memory -run-json /home/ubuntu/.chhaya/backups/memrun.json -env deploy/.env.gateway -send >> /home/ubuntu/.chhaya/backups/report.log 2>&1
