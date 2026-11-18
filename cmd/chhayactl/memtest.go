@@ -13,11 +13,12 @@ import (
 	"github.com/satishthakur/chhaya/internal/botguard"
 	"github.com/satishthakur/chhaya/internal/memrun"
 	"github.com/satishthakur/chhaya/internal/memtest"
+	"github.com/satishthakur/chhaya/internal/nightly"
 )
 
 const memtestUsage = `chhayactl memtest <check | run> [-memory DIR]
 
-  run    [-memory DIR] [-env-file FILE] [-model M] [-judge=true] [-judge-model M] [-steps 8]
+  run    [-memory DIR] [-env-file FILE] [-json FILE] [-model M] [-judge=true] [-judge-model M] [-steps 8]
          answer every probe and golden question with a small model that has only memory_list and
          memory_get, against a copy of the memory (no .tests, .proposals or .git in it). Reports,
          per probe, whether the fact's line reached the model (MISS if not), how many model and
@@ -26,7 +27,8 @@ const memtestUsage = `chhayactl memtest <check | run> [-memory DIR]
          the model whether each answer matches the expected one: WRONG lines are reported, and
          do not change the exit code until someone has compared them with their own reading.
          Needs PROXY_API_KEY and CHHAYA_HERMES_API_BASE, from the environment or -env-file
-         (default deploy/.env.hermes). The key is never printed. Costs a few cents.
+         (default deploy/.env.hermes). The key is never printed. -json FILE saves the
+         result for the nightly report, even when the run fails. Costs a few cents.
 
   check  read Personal memory and its .tests directory (probes.json, golden.json) and report:
          a fact line with no proposal id, an id on two lines, a probe about a fact that is not
@@ -89,6 +91,7 @@ func runMemtestRun(args []string, out io.Writer) error {
 	judgeModel := fs.String("judge-model", "claude-sonnet-5-5", "the model that grades answers (not the one tested)")
 	judge := fs.Bool("judge", true, "ask the model whether each probe answer matches the expected one")
 	steps := fs.Int("steps", 8, "most model calls per question")
+	jsonOut := fs.String("json", "", "also write the result here, for `chhayactl report nightly` (written even when the run fails)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -119,6 +122,12 @@ func runMemtestRun(args []string, out io.Writer) error {
 	res := memrun.Run(ctx, *dir, rep, newMemModel(base, key, *model),
 		memrun.Options{MaxSteps: *steps, Judge: *judge, JudgeModel: newMemModel(base, key, *judgeModel)})
 	writeRun(out, res, *judge, *model+judgeNote(*judge, *judgeModel))
+	if *jsonOut != "" {
+		rf := nightly.RunFile{RanAt: time.Now().UTC(), Model: *model, Result: res}
+		if err := nightly.WriteRunFile(*jsonOut, rf); err != nil {
+			return fmt.Errorf("write %s: %w", *jsonOut, err)
+		}
+	}
 	if n := res.Gate(); n > 0 {
 		return fmt.Errorf("%d failure(s)", n)
 	}

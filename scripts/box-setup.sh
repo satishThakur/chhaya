@@ -73,8 +73,8 @@ fi
 # --- cron entry (only when asked: on a fresh box there is no data to back up yet) -
 # Both jobs must be present, so a box set up before the trace export existed gets it too.
 cur="$(crontab -u "$BOX_USER" -l 2>/dev/null || true)"
-if [ "$want_cron" -eq 1 ] && { ! grep -q 'dev.sh backup' <<<"$cur" || ! grep -q 'trace export' <<<"$cur" || ! grep -q 'cost report' <<<"$cur" || ! grep -q 'trace check' <<<"$cur" || ! grep -q 'memtest check' <<<"$cur" || ! grep -q 'memtest run' <<<"$cur"; }; then
-  missing+=("crontab for $BOX_USER (nightly backup, trace export, trace check, memtest check and run, session cost report)")
+if [ "$want_cron" -eq 1 ] && { ! grep -q 'dev.sh backup' <<<"$cur" || ! grep -q 'trace export' <<<"$cur" || ! grep -q 'cost report' <<<"$cur" || ! grep -q 'trace check' <<<"$cur" || ! grep -q 'memtest check' <<<"$cur" || ! grep -q 'memtest run' <<<"$cur" || ! grep -q 'report nightly' <<<"$cur"; }; then
+  missing+=("crontab for $BOX_USER (nightly backup, trace export, trace check, memtest check and run, morning report, session cost report)")
   [ "$mode" = install ] && crontab -u "$BOX_USER" "$REPO_DIR/deploy/crontab.box"
 fi
 
