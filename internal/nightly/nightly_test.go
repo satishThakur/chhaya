@@ -108,13 +108,83 @@ func TestJudgeWrongDoesNotChangeVerdict(t *testing.T) {
 
 func TestHTMLEscapesAndShowsDetail(t *testing.T) {
 	in := goodInput()
-	in.Results[0].Findings = []check.Finding{{Check: "c", Level: check.Flag, MessageID: 3, Detail: `<script>alert(1)</script> podcast`}}
+	in.Checks = check.All()
+	name := in.Checks[0].Name
+	in.Results[0].Ran = []string{name}
+	in.Results[0].Findings = []check.Finding{{Check: name, Level: check.Flag, MessageID: 3, Detail: `<script>alert(1)</script> podcast`}}
 	h := HTML(in)
 	if strings.Contains(h, "<script>alert") {
 		t.Fatal("finding text was not escaped")
 	}
 	if !strings.Contains(h, "&lt;script&gt;") || !strings.Contains(h, "t1") {
 		t.Fatalf("detail or trace id missing:\n%s", h)
+	}
+}
+
+func TestHTMLHasHeaderSectionsAndARowPerTest(t *testing.T) {
+	in := goodInput()
+	in.Checks = check.All()
+	h := HTML(in)
+	if !strings.Contains(h, "Overall: PASS") {
+		t.Fatalf("no overall header:\n%s", h)
+	}
+	for _, title := range []string{"Trace checks", "Memory tests: structure", "Memory canary: retrieval", "Memory canary: golden questions", "Memory canary: judge"} {
+		if !strings.Contains(h, title) {
+			t.Errorf("section %q missing", title)
+		}
+	}
+	// Every section is collapsed: none carries the open attribute.
+	if strings.Contains(h, "<details class=\"sec\" open") || strings.Contains(h, "<details class=\"row\" open") {
+		t.Error("sections and rows must start collapsed")
+	}
+	// Every check is listed even when it found nothing.
+	for _, c := range check.All() {
+		if !strings.Contains(h, c.Name) {
+			t.Errorf("check %s not listed", c.Name)
+		}
+	}
+	if !strings.Contains(h, "Deterministic") || !strings.Contains(h, "Probabilistic") {
+		t.Error("each row must say whether it is deterministic or probabilistic")
+	}
+}
+
+func TestHTMLFailAndJudgeRows(t *testing.T) {
+	in := goodInput()
+	in.Run.Result.Probes[0].Retrieved = false
+	no := false
+	in.Run.Result.Probes = append(in.Run.Result.Probes, memrun.ProbeResult{ID: "p2", Fact: "f2", Retrieved: true, Judged: &no, JudgeWhy: "wrong book"})
+	h := HTML(in)
+	if !strings.Contains(h, "Overall: FAIL") {
+		t.Fatal("a MISS must make the overall result FAIL")
+	}
+	secs := Sections(in)
+	var judge Section
+	for _, s := range secs {
+		if strings.HasSuffix(s.Title, "judge") {
+			judge = s
+		}
+	}
+	if judge.Count(Fail) != 1 {
+		t.Fatalf("the judge's verdict should show as a Fail row: %+v", judge.Rows)
+	}
+	for _, r := range judge.Rows {
+		if r.Type != Probabilistic {
+			t.Errorf("judge row %s is %s, want Probabilistic", r.Name, r.Type)
+		}
+	}
+	in2 := goodInput()
+	in2.Run.Result.Probes[0].Judged = &no
+	if !strings.Contains(HTML(in2), "Overall: PASS") {
+		t.Fatal("a judge Fail alone must not change the overall result")
+	}
+}
+
+func TestHTMLNotRunIsNotAPass(t *testing.T) {
+	in := goodInput()
+	in.Run = nil
+	h := HTML(in)
+	if !strings.Contains(h, "Overall: FAIL") || !strings.Contains(h, "Not run") {
+		t.Fatalf("a canary that did not run must show Not run and FAIL:\n%s", h)
 	}
 }
 

@@ -74,7 +74,7 @@ func runReport(args []string, out io.Writer, d reportDeps) error {
 	today := now.In(trace.IST)
 	days := []string{today.AddDate(0, 0, -1).Format("2006-01-02"), today.Format("2006-01-02")}
 
-	in := nightly.Input{Days: days, Now: now}
+	in := nightly.Input{Days: days, Now: now, Checks: check.All()}
 	root := *dir
 	if *s3 != "" {
 		tmp, err := os.MkdirTemp("", "chhaya-report-")
