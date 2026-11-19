@@ -1,0 +1,63 @@
+{
+ "id": "recall-heard",
+ "note": "The 2026-11-16 podcast case, with invented names: the owner says what they have already heard.",
+ "cap": 5,
+ "memory": {
+  "interests": [
+   "Enjoys Dr. Vale's Quiet Mind lectures and the Harbor Talks podcast. <!-- proposal 20261102-0abc000000001eef, approved 2026-11-02 -->"
+  ]
+ },
+ "trace": {
+  "id": "synthetic",
+  "source": "telegram",
+  "messages": [
+   {
+    "id": 1,
+    "role": "user",
+    "content": "suggest a podcast for my commute"
+   },
+   {
+    "id": 2,
+    "role": "assistant",
+    "content": "How about the Quiet Mind lectures by Dr. Vale?"
+   },
+   {
+    "id": 3,
+    "role": "user",
+    "content": "Already heard the whole Quiet Mind series."
+   },
+   {
+    "id": 4,
+    "role": "assistant",
+    "content": "Then Harbor Talks?"
+   },
+   {
+    "id": 5,
+    "role": "user",
+    "content": "heard Harbor Talks season one too, give me something new"
+   }
+  ]
+ },
+ "expect": {
+  "propose": [
+   {
+    "path": "interests",
+    "all": [
+     "quiet mind"
+    ],
+    "source": [
+     3
+    ]
+   },
+   {
+    "path": "interests",
+    "all": [
+     "harbor talks"
+    ],
+    "source": [
+     5
+    ]
+   }
+  ]
+ }
+}

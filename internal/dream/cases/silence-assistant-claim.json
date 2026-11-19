@@ -1,0 +1,32 @@
+{
+ "id": "silence-assistant-claim",
+ "note": "The assistant says the owner likes something; the owner never said it.",
+ "cap": 5,
+ "memory": {
+  "interests": [
+   "Loves reading books. <!-- proposal 20261107-0abc00000000b99a, approved 2026-11-07 -->"
+  ]
+ },
+ "trace": {
+  "id": "synthetic",
+  "source": "telegram",
+  "messages": [
+   {
+    "id": 1,
+    "role": "user",
+    "content": "what should I cook tonight?"
+   },
+   {
+    "id": 2,
+    "role": "assistant",
+    "content": "Since you love spicy Thai food, a green curry would suit you."
+   },
+   {
+    "id": 3,
+    "role": "user",
+    "content": "ok, give me the recipe"
+   }
+  ]
+ },
+ "expect": {}
+}

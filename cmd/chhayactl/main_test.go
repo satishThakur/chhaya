@@ -576,3 +576,19 @@ func TestReportNightlyPrintsSendsAndNeverLeaksText(t *testing.T) {
 		t.Fatal("message text or the bot token leaked")
 	}
 }
+
+func TestDreamEvalRunsTheShippedCasesAndFailsOnAMiss(t *testing.T) {
+	envf := filepath.Join(t.TempDir(), "env")
+	os.WriteFile(envf, []byte("PROXY_API_KEY=k\nCHHAYA_HERMES_API_BASE=http://x/v1\n"), 0o600)
+	newMemModel = func(string, string, string) memrun.Model {
+		return &fakeMemModel{replies: []memrun.Message{{Role: "assistant", Content: `{"proposals":[]}`}}}
+	}
+	var out bytes.Buffer
+	err := runDream([]string{"eval", "-cases", "../../internal/dream/cases", "-env-file", envf}, &out)
+	if err == nil || !strings.Contains(out.String(), "FAIL  recall-heard") || !strings.Contains(out.String(), "pass  silence-greeting") {
+		t.Fatalf("a model that proposes nothing must fail the recall cases and pass the silence ones:\n%s\n%v", out.String(), err)
+	}
+	if err := runDream([]string{"nonsense"}, &out); err == nil {
+		t.Fatal("an unknown subcommand must be an error")
+	}
+}

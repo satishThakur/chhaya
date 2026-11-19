@@ -1,0 +1,30 @@
+{
+ "id": "cap-five-facts-cap-three",
+ "note": "Five distinct facts in one message with a cap of three: exactly three go to the owner and two are counted.",
+ "cap": 3,
+ "memory": {
+  "interests": [
+   "Loves reading books. <!-- proposal 20261103-0abc000000003dde, approved 2026-11-03 -->"
+  ]
+ },
+ "trace": {
+  "id": "synthetic",
+  "source": "telegram",
+  "messages": [
+   {
+    "id": 1,
+    "role": "user",
+    "content": "Some things to know about me: I run 10 km every Sunday, I'm vegetarian, I wake up at 5 am, I have a cat named Miso and I'm learning Spanish."
+   },
+   {
+    "id": 2,
+    "role": "assistant",
+    "content": "Thanks, that helps."
+   }
+  ]
+ },
+ "expect": {
+  "count": 3,
+  "over_cap": 2
+ }
+}
