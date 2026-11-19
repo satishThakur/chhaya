@@ -49,3 +49,5 @@ Hermes has plugin hooks (`on_session_end` per turn, `on_session_finalize`, `on_s
 ## Dreaming pipeline: nightly memory extractor (design only, asked 2026-11-16)
 
 Design in `docs/dreaming.md` (memory as a module: branch, gates, canary; reshaped 2026-11-16). First, and inside the freeze: the owner's memory tests (probes and golden set) and the gates and canary as code. After that, needs the freeze lifted: the `dreamer` gateway client, the lossless pass, the extractor.
+
+- **Backup and trace export report like the other jobs.** Add "backup ran / export ran, with sizes" rows to the morning report (they run before it), so a failed backup is a FAILED line on Telegram and not a line in backup.log. (docs/decisions.md, 2026-11-19, every job reports.)

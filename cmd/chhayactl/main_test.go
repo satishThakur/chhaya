@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/satishthakur/chhaya/internal/jobreport"
 	"github.com/satishthakur/chhaya/internal/memrun"
 	"github.com/satishthakur/chhaya/internal/nightly"
 	"io/fs"
@@ -673,5 +674,59 @@ func TestDreamRunDryRunThenProposeOnAnOldTrace(t *testing.T) {
 	}
 	if err := runDreamRun([]string{"-trace", "nope", "-dir", evals, "-env-file", envf}, &out, d); err == nil {
 		t.Fatal("an unknown trace id must be an error")
+	}
+}
+
+func TestDreamRunSendsASummaryWithNoTextAndALink(t *testing.T) {
+	evals := t.TempDir()
+	os.MkdirAll(filepath.Join(evals, "days", "2026-11-16"), 0o755)
+	tr := `{"schema":2,"id":"old1","day":"2026-11-16","source":"telegram","started":"2026-11-16T04:00:00Z","last_message":"2026-11-16T04:05:00Z","messages":[` +
+		`{"id":7,"role":"user","time":"2026-11-16T04:00:00Z","content":"I already heard the SECRETSERIES"},` +
+		`{"id":8,"role":"assistant","time":"2026-11-16T04:00:05Z","content":"Noted."}]}`
+	os.WriteFile(filepath.Join(evals, "days", "2026-11-16", "trace-old1.json"), []byte(tr), 0o644)
+	envf := filepath.Join(t.TempDir(), "env")
+	os.WriteFile(envf, []byte("PROXY_API_KEY=k\nCHHAYA_HERMES_API_BASE=http://x/v1\n"), 0o600)
+	gwenv := filepath.Join(t.TempDir(), "genv")
+	os.WriteFile(gwenv, []byte("CHHAYA_APPROVER_BOT_TOKEN=tok-secret\nCHHAYA_APPROVER_ALLOWED_USERS=42\n"), 0o600)
+	call := `{"path":"interests","entry":"Has already heard the SECRETSERIES.","rationale":"said so","source":[7]}`
+	newMemModel = func(string, string, string) memrun.Model {
+		return &fakeMemModel{replies: []memrun.Message{
+			{Role: "assistant", ToolCalls: []memrun.ToolCall{{ID: "1", Name: "propose_fact", Args: call}}},
+			{Role: "assistant", Content: "done"},
+		}}
+	}
+	rec := &nightSender{}
+	var aws []string
+	d := dreamRunDeps{now: func() time.Time { return time.Date(2026, 11, 19, 3, 0, 0, 0, time.UTC) },
+		run: func(name string, args ...string) ([]byte, error) {
+			aws = append(aws, strings.Join(args, " "))
+			if len(args) > 1 && args[1] == "presign" {
+				return []byte("https://signed/x\n"), nil
+			}
+			return []byte("{}"), nil // the trace store lists nothing in the bucket; the local dir is used below
+		},
+		connect: func(context.Context, string, string) (dreamGateway, error) { return &fakeDreamGW{}, nil },
+		sender:  func(string, int64) jobreport.Sender { return rec }}
+	var out bytes.Buffer
+	// -s3 is needed for the link, but traces are read from -dir here: give both
+	err := runDreamRun([]string{"-s3", "s3://b/evals", "-dir", evals, "-day", "2026-11-16", "-env-file", envf, "-env", gwenv, "-send", "-ledger", filepath.Join(t.TempDir(), "l.json")}, &out, d)
+	if len(rec.got) != 1 {
+		t.Fatalf("one summary must be sent (err %v):\n%s", err, out.String())
+	}
+	m := rec.got[0]
+	if !strings.Contains(m, "https://signed/x") || !strings.Contains(m, "dry run") || strings.Contains(m, "SECRETSERIES") || strings.Contains(m+out.String(), "tok-secret") {
+		t.Fatalf("summary: %s", m)
+	}
+	// a run that cannot reach the gateway still reports
+	rec.got = nil
+	d.connect = func(context.Context, string, string) (dreamGateway, error) {
+		return nil, errors.New("connection refused")
+	}
+	err = runDreamRun([]string{"-s3", "s3://b/evals", "-dir", evals, "-day", "2026-11-16", "-env-file", envf, "-env", gwenv, "-send"}, &out, d)
+	if err == nil || len(rec.got) != 1 || !strings.Contains(rec.got[0], "FAILED") || !strings.Contains(rec.got[0], "connection refused") {
+		t.Fatalf("a run that could not start must say so: %v %v", err, rec.got)
+	}
+	if err := runDreamRun([]string{"-send", "-dir", evals, "-env-file", envf, "-env", gwenv}, &out, d); err == nil {
+		t.Fatal("-send without -s3 has nowhere to put the page and must be refused")
 	}
 }

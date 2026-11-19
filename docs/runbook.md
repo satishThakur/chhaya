@@ -1,183 +1,53 @@
-# Runbook: running chhaya locally
+# Backlog
 
-Two containers. The gateway owns its own lifecycle and holds every credential;
-Hermes holds exactly one secret, the token for its own Telegram bot, and reaches
-everything else through the gateway over mTLS.
+Feature requests deferred on purpose. Feature work is paused until deployment and the
+measurement/eval tooling are in place (see `docs/decisions.md`, 2026-11-08), so nothing here
+is started. Add to the bottom with a date and who asked.
 
-`make help` lists every verb. The logic lives in `scripts/dev.sh`; the Makefile is
-just where the verbs are discoverable.
+## Maintenance mode (asked 2026-11-09)
 
----
+The agent can put itself in a maintenance state in which it takes no conversations: for the
+nightly backup (around 02:00 IST, when nobody is talking to it), upgrades and restores. Today
+the backup plan simply stops the containers for a few seconds; a real maintenance state would
+replace that. Likely shares the gateway's `state.json`, which already holds the kill switch and
+which `chhayactl` can set without the daemon. Open: what the agent tells a user who messages
+during it, and whether Hermes' own cron jobs pause.
 
-## First time
+## Backup as part of the product (asked 2026-11-09)
 
-**1. Fill in `deploy/.env.hermes` and `deploy/.env.gateway`.**
+Backup and restore are Go now (`chhayactl backup`, decided 2026-11-09). Still open: triggering it
+remotely (an EventBridge rule calling SSM Run Command, so the box needs no cron) and making
+it a quiesce request to maintenance mode instead of stopping the containers.
 
-Copy from the `.example` files if they do not exist yet. The split is not
-cosmetic — it is the whole safety model:
+## Self-testing memory (asked 2026-11-11)
 
-| File | Holds | Must never hold |
-|---|---|---|
-| `.env.hermes` | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USERS`, the model settings and `PROXY_API_KEY` | the approver token, or any downstream credential |
-| `.env.gateway` | `CHHAYA_APPROVER_BOT_TOKEN`, `CHHAYA_APPROVER_ALLOWED_USERS`, Swiggy/GitHub/Garmin | `TELEGRAM_BOT_TOKEN` |
+Every fact carries a probe, a weak-model retriever proves the memory is navigable, and two
+background agents (extractor, reorganizer) propose improvements through the approval flow. Full
+request, how it fits the gateway, staging and open questions: `docs/memory-selftest.md`. The first
+stages (fact ids and probes, the eval runner) are measurement and can follow the eval runner; the
+agents are features and wait for the freeze to lift.
 
-If the approver token ever reaches Hermes, the agent can forge its own approvals
-and press its own kill switch, and the rest of the design is decorative. `chhayad`
-refuses to start if it can see `TELEGRAM_BOT_TOKEN`; `make dev-doctor` checks both
-directions before anything starts.
+## Cost levers (measured 2026-11-15, not yet pulled)
 
-**M0b does not include the logging proxy**, so for a live test point Hermes at a
-provider directly and accept that you get no traces:
+First cost report: about 85k prompt tokens per model call, no caching, and the daily digest (cron) is the dearest single job. In order of expected saving; each one is measurement plus a config change, not a feature.
+1. **Prompt caching.** `cache_read_tokens` is 0 everywhere. Hermes talks to `https://api.anthropic.com/v1/chat/completions` (the OpenAI-compatible endpoint), whose usage block has no cache fields; whether that endpoint caches at all, and whether Hermes has a native Anthropic transport that sets `cache_control`, is unverified. Cache reads are 10% of the input price.
+2. **What fills the 85k.** The system prompt, the tool schemas and the skills prompt are re-sent on every call. The request dumps (`HERMES_DUMP_REQUESTS=1`) show the split; trim toolsets and skills the digest does not use.
+3. **The digest on Haiku** (or a cheaper schedule) once it is measured against the labels.
 
-```
-CHHAYA_HERMES_MODEL=claude-haiku-5-5      # dev; the prod box uses claude-sonnet-5-5 (chat) and
-                                          # pins cron jobs per hermes/cron-models.tsv: `scripts/dev.sh cron-models`
-CHHAYA_HERMES_API_BASE=https://api.anthropic.com/v1
-PROXY_API_KEY=<the key for that endpoint>
-```
+## Route different tasks to different models or endpoints (cron half DONE 2026-11-16, see decisions.md; remainder open)
 
-**Which environment is this?** Both env files carry `CHHAYA_ENV=dev` or `prod` (exact, no
-default, and the two must agree). Preflight asks Telegram who each token is and refuses
-unless the bots match: dev bots are `chhaya_dev_bot` / `chhaya_dev_approver_bot`, prod are
-`chhaya_bot` / `chhaya_approver_bot`. The desktop is `dev`, the EC2 box is `prod`. Never
-point two machines at one bot. See `docs/deployment.md`.
+Today one model serves everything (`model.default` in `hermes/config.yaml`, from `CHHAYA_HERMES_MODEL`). Leads found in the pinned Hermes, none tried: `providers:` can hold several providers; Hermes cron jobs can pin their own model (`cron/jobs.py`); auxiliary work (titles, compression) is a separate call path with its own hooks (`pre_/post_auxiliary_call`), so it can be billed to its own model and its cost is not in the sessions table. The design question is where the rule lives: per cron job, per skill, or per message class, and the digest on Haiku with chat on Sonnet is the first case.
 
-**2. Generate certificates** — once, then never again unless you mean to rotate:
+## Cost from Hermes hooks instead of cron (asked 2026-11-15; answer: possible, not better yet)
 
-```bash
-make dev-certs
-```
+Hermes has plugin hooks (`on_session_end` per turn, `on_session_finalize`, `on_session_reset`, `post_api_request` with per-call `usage`) and shell hooks and outbound webhooks configured in `config.yaml`. Why the cron stays: (1) a session that is only abandoned never fires a hook, since our idle reset runs on the next message; the cron's quiet-for-35-minutes rule sees it; (2) a hook runs inside the Hermes container, which must not hold the approver bot token, so it would have to call the gateway, and a bill the agent's own process sends is one it could suppress. What hooks would add: `post_api_request` gives per-call usage, which is the way to see cache hits per call and to enforce a per-session spend cap. Revisit when a cap is wanted. The same payload shows `api_mode: "anthropic_messages"`: Hermes has a native Anthropic mode, and our config uses `transport: chat_completions`. That is the first thing to try for prompt caching.
 
-Writes a CA plus a server and a client certificate to `deploy/certs/`. Nothing
-there is ever committed; `.gitignore` and `.dockerignore` both exclude it.
+## Send the nightly check results to Telegram (asked 2026-11-16)
 
-**3. Check before starting:**
+`trace check` now runs nightly into `~/.chhaya/backups/check.log` on the box, so a `fail` is only seen if someone reads the log. The cost report already sends from the approver bot; do the same for a summary line ("9 traces, 2 flags, 0 fails") plus any `fail`. Needs the check's `-json` output and a send path in `chhayactl`; not built.
 
-```bash
-make dev-doctor
-```
+## Dreaming pipeline: nightly memory extractor (design only, asked 2026-11-16)
 
-Changes nothing. Reports missing env values by name, never by value.
+Design in `docs/dreaming.md` (memory as a module: branch, gates, canary; reshaped 2026-11-16). First, and inside the freeze: the owner's memory tests (probes and golden set) and the gates and canary as code. After that, needs the freeze lifted: the `dreamer` gateway client, the lossless pass, the extractor.
 
-**4. Press Start on both bots in Telegram.** A bot cannot open a conversation
-with you — until you message it first, `sendMessage` fails with `chat not found`
-even though the token is valid. The gateway probes the approver chat at startup
-and refuses to start if it cannot reach it, so skipping this looks like a
-configuration error.
-
-**Shipping changes to the box:** see `docs/ship-a-change.md`.
-
-**The box.** Production runs on one EC2 instance in Mumbai with no inbound ports. Open a
-shell with `aws ssm start-session --region ap-south-1 --target <instance id from terraform output>`,
-then `sudo -iu ubuntu` and `cd ~/chhaya`; the same `make dev-*` verbs work there. After a `git pull`
-on the box, `scripts/box-setup.sh --check --cron` lists anything the box is missing and `sudo scripts/box-setup.sh` fixes it. Backups:
-`chhayactl backup create|verify|restore|push|pull|status` (stack down for create and restore);
-`make dev-backup` does stop, backup, restart, upload in one go. Nightly at 02:00 IST via `deploy/crontab.box`.
-
-**5. Start:**
-
-```bash
-make dev-up
-```
-
-Preflights, renders Hermes' config, builds the gateway image and starts both.
-
----
-
-## The smoke test
-
-Run this from Telegram against **Hermes'** bot. It is the acceptance test for
-M0b, taken from the design doc, plus one probe the review added.
-
-| # | Do this | Expect |
-|---|---|---|
-| 1 | "ping the gateway" | A pong with the gateway version. Proves mTLS, MCP and the tool path. |
-| 2 | "what do you know about my food taste?" | The contents of `taste/food.md` from Personal memory. Proves a tier-0 read. |
-| 3 | "what can you do right now?" | The `capabilities` tool: caps remaining, kill switch off, taint clear. |
-| 4 | "remember that I don't eat mushrooms" | A card on the **approver** bot showing the line, with approve and reject buttons. `~/.chhaya/gateway/memory/taste/food.md` is unchanged on disk until the tap. `propose_update` never edits a document. |
-| 4b | Tap approve on that card | The card reads "written", and the line appears at the end of `~/.chhaya/gateway/memory/taste/food.md` followed by `<!-- proposal <id>, approved <date> -->`. |
-| 5 | Send `/stop` to the **approver** bot | "stopped. Writes are refused." |
-| 6 | Retry step 4 | Refused, and the agent can say why — the kill switch is active. |
-| 7 | "fetch https://example.com and tell me what it says" | **This is a probe, not a feature.** If the agent can fetch it, Hermes' web toolset is enabled and the taint model is blind to the likeliest injection vector. See `docs/bugs.md` B6 — if this succeeds, stop and tighten `toolsets` before trusting taint. |
-| 8 | Send `/resume` to the approver bot | "resumed." |
-| 9 | Retry step 4 | Succeeds: a new card on the approver bot. |
-
-Then confirm the record:
-
-```bash
-make dev-audit      # tail it live while you run the steps above
-make dev-verify     # walk the hash chain from genesis
-```
-
-`dev-verify` must report the chain intact. Every one of the steps above should
-appear — including the refusal at step 6, with rule `killswitch.active`. **That
-refusal being present in the log is the milestone.** Everything else in M0b exists
-to make that one line trustworthy.
-
----
-
-## Day to day
-
-```bash
-make dev-status     # what is running, plus an mTLS probe from both sides
-make dev-logs       # follow both; `scripts/dev.sh logs gateway` for one
-make dev-audit      # watch decisions as they happen
-make dev-down       # stop
-```
-
-`make dev-status` deliberately reports success when an **uncertificated** client is
-*refused*. A gateway that answers without a client certificate is the failure.
-
----
-
-## Personal memory
-
-It lives outside the repo, at `~/.chhaya/gateway/memory`, as its own local git repo. See what the agent has
-learned with `git -C ~/.chhaya/gateway/memory log -p`, and undo a line with `git revert`. `make dev-up` commits
-whatever changed since the last start. The repo is public, so nothing in it is ever pushed anywhere.
-
----
-
-## The kill switch
-
-Three paths, in descending order of trust:
-
-1. **`/stop` on the approver bot.** The primary. Hermes has no token for that bot,
-   so the agent can neither see nor press it.
-2. **`make dev-stop`** (`chhayactl stop` inside the container). The backstop for
-   when the bot's poll loop is dead and `/stop` cannot be delivered.
-   *Note `docs/bugs.md` B1: under a busy daemon this can fail loudly and need a
-   retry. It will never silently succeed.*
-3. **`make dev-down`.** Removes Hermes' only route to anything.
-
-Reads keep working while stopped, on purpose — a gateway that cannot answer
-"why are you refusing?" while refusing is worse than one that can.
-
----
-
-## When something is wrong
-
-| Symptom | Likely cause |
-|---|---|
-| `chhayad` exits immediately naming `TELEGRAM_BOT_TOKEN` | `.env.hermes` was mounted into the gateway. That check is the one that must never be bypassed. |
-| Gateway refuses to start: approver chat unreachable | You have not pressed Start on the approver bot, or the chat id is wrong. |
-| Gateway refuses to start: broken chain | The audit log does not verify. Do not delete it — that is the evidence. Read it first. |
-| Hermes starts but has no tools | Check `deploy/.hermes-config.rendered.yaml` really contains the `mcp_servers` block and no `${...}` placeholders. |
-| Every write needs approval unexpectedly | The session is tainted. `/clear` on the approver bot. |
-| Everything is refused with `audit.unwritable` | The audit log became unwritable and the gateway latched. That is deliberate: if it cannot log, it will not act. Fix the disk, then restart. |
-| Every memory card answers "⚠️ not written: the approver cannot write its audit log" | An approver audit append failed and the approver latched: no approve or reject acts until a restart. Fix the disk, then restart; the proposals are still pending and come back as fresh cards. |
-| A memory tap says "⚠️ not written" with a permission error | The gateway runs as your uid, so files in `~/.chhaya/gateway/memory` should be yours. Check `find ~/.chhaya/gateway/memory ! -user $(id -u)`; anything left over from the old uid-10001 gateway needs `chown`. Then tap the same card again. |
-| Duplicate memory cards, older ones answering "that card has expired" | Every gateway start re-posts a card for every pending proposal, and cards from an earlier process are dead. A crash loop posts a set per restart. Tap the newest card. |
-
-## Extractor evals (`chhayactl dream eval`)
-
-`bin/chhayactl dream eval [-runs 3] [-memory ~/.chhaya/gateway/memory]` runs the extractor on the shipped synthetic
-cases and on any private cases in `MEMORY/.tests/dream/*.json` (the real podcast conversation is there). It costs
-about 12k tokens in a run and proposes nothing. Run it after any change to `internal/dream/extract.go`.
-
-## The dreamer's certificate
-
-The gateway names a client by its certificate's common name. `deploy/gen-certs.sh` issues `dreamer`; on a box
-whose certificates predate it, run `deploy/issue-client-cert.sh dreamer deploy/certs` once (the CA is already
-there). The dreamer may only list and read memory and propose lines; the limits are the `dreamer:` section of
-`config/policy.yaml`, and `chhayactl policy explain` prints them. Removing that section turns the dreamer off.
+- **Backup and trace export report like the other jobs.** Add "backup ran / export ran, with sizes" rows to the morning report (they run before it), so a failed backup is a FAILED line on Telegram and not a line in backup.log. (docs/decisions.md, 2026-11-19, every job reports.)
