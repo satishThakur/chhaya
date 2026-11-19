@@ -148,7 +148,7 @@ func (b *Bot) memoryTap(ctx context.Context, c *Callback, approve bool) {
 	// it. Everything that denies outright — the kill switch, the rate limit —
 	// still applies: a tap does not outrank /stop.
 	d := policy.Decide(policy.Request{
-		Tool: memoryTool, Known: true, Tier: policy.TierInternal, Kind: policy.Write,
+		Actor: policy.ActorApprover, Tool: memoryTool, Known: true, Tier: policy.TierInternal, Kind: policy.Write,
 		ArgsOK: true, ValidatorOK: true,
 	}, b.state.Snapshot(now), b.cfg, now)
 	if d.Outcome == policy.Deny {

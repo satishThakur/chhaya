@@ -57,10 +57,13 @@ func (k Kind) String() string {
 // the tool's registration, never from the caller — a caller cannot propose its
 // own tier, its own kind, or its own existence.
 type Request struct {
-	Tool string
-	Args map[string]any
-	Kind Kind
-	Tier Tier
+	// Actor is who is calling, taken from the verified client certificate and never from the
+	// request. An actor this package does not know is denied.
+	Actor string
+	Tool  string
+	Args  map[string]any
+	Kind  Kind
+	Tier  Tier
 
 	// Known reports whether the registry recognised Tool. False denies.
 	Known bool
@@ -100,8 +103,46 @@ type Cap struct {
 	PerDayMinor   int64
 }
 
+// The actors the gateway knows. Hermes is the agent; the dreamer is the nightly memory agent, a
+// separate client with its own certificate and a short allowlist (docs/dreaming.md).
+const (
+	ActorHermes  = "hermes"
+	ActorDreamer = "dreamer"
+	// ActorApprover is the approver bot acting in-process on a tap. It is not a client of the MCP
+	// server and may only apply an approved memory line; a certificate that claimed this name could
+	// call nothing else, and memory.apply is not a registered tool.
+	ActorApprover = "approver"
+)
+
+// CapDreamerProposals is the daily counter (in state.Spent) of memory proposals the dreamer made.
+const CapDreamerProposals = "dreamer.proposals"
+
+// dreamerTools is everything the dreamer may call. It can read memory and propose a line, which
+// waits for the owner's tap. It has no tool to write, merge, revert, approve or touch the memory
+// tests, and none will be added by listing a name here: a tool must also exist in the registry.
+var dreamerTools = map[string]bool{"memory.list": true, "memory.get": true, "memory.propose_update": true}
+
+var approverTools = map[string]bool{"memory.apply": true}
+
+// CallKey is the key under which a call is counted for the hourly limit. Hermes and the approver
+// keep the bare tool name, so counts already on disk stay valid; the dreamer has its own counters.
+func CallKey(actor, tool string) string {
+	if actor == ActorDreamer {
+		return actor + "/" + tool
+	}
+	return tool
+}
+
+// DreamerLimits are the dreamer's own numbers. Zero, and an absent section, mean the dreamer may do
+// nothing: a missing cap is zero, not infinity.
+type DreamerLimits struct {
+	ProposalsPerDay int
+	CallsPerHour    int
+}
+
 // Config holds values supplied by config/policy.yaml. It holds no rules.
 type Config struct {
+	Dreamer            DreamerLimits
 	Caps               map[string]Cap
 	DefaultRatePerHour int
 	ApprovalTimeout    time.Duration

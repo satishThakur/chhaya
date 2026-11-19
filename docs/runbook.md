@@ -174,3 +174,10 @@ Reads keep working while stopped, on purpose — a gateway that cannot answer
 `bin/chhayactl dream eval [-runs 3] [-memory ~/.chhaya/gateway/memory]` runs the extractor on the shipped synthetic
 cases and on any private cases in `MEMORY/.tests/dream/*.json` (the real podcast conversation is there). It costs
 about 12k tokens in a run and proposes nothing. Run it after any change to `internal/dream/extract.go`.
+
+## The dreamer's certificate
+
+The gateway names a client by its certificate's common name. `deploy/gen-certs.sh` issues `dreamer`; on a box
+whose certificates predate it, run `deploy/issue-client-cert.sh dreamer deploy/certs` once (the CA is already
+there). The dreamer may only list and read memory and propose lines; the limits are the `dreamer:` section of
+`config/policy.yaml`, and `chhayactl policy explain` prints them. Removing that section turns the dreamer off.

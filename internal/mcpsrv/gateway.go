@@ -42,7 +42,7 @@ type Approver interface {
 }
 
 type ToolCall struct {
-	Actor string // "hermes"
+	Actor string // from the client certificate; see ActorHandler
 	Name  string
 	Args  map[string]any
 
@@ -129,6 +129,7 @@ func (g *Gateway) Invoke(ctx context.Context, call ToolCall) ToolResult {
 	reg, known := g.tools[call.Name]
 
 	req := policy.Request{
+		Actor:     call.Actor,
 		Tool:      call.Name,
 		Args:      call.Args,
 		Known:     known,
@@ -224,7 +225,7 @@ func recordedOutcome(d policy.Decision, res ToolResult) (decision, ruleID, reaso
 }
 
 func (g *Gateway) dispatch(ctx context.Context, reg Registration, call ToolCall, start time.Time) ToolResult {
-	if err := g.state.RecordCall(call.Name, start); err != nil {
+	if err := g.state.RecordCall(policy.CallKey(call.Actor, call.Name), start); err != nil {
 		return ToolResult{IsError: true, RuleID: "state.unwritable",
 			Error: "refused: the gateway cannot record this call, so it will not make it"}
 	}
@@ -244,6 +245,15 @@ func (g *Gateway) dispatch(ctx context.Context, reg Registration, call ToolCall,
 	v, err := callHandler(ctx, reg.Handle, call.Args)
 	if err != nil {
 		return ToolResult{Trust: reg.Trust, IsError: true, Error: err.Error()}
+	}
+	// A proposal that was accepted counts against the dreamer's daily cap. One that failed does not:
+	// the owner saw nothing. If the count cannot be recorded the call is reported as failed, and
+	// the cap is read from the same file on the next call, so it cannot be skipped.
+	if call.Actor == policy.ActorDreamer && call.Name == "memory.propose_update" {
+		if err := g.state.RecordSpend(policy.CapDreamerProposals, 1, start); err != nil {
+			return ToolResult{IsError: true, RuleID: "state.unwritable",
+				Error: "the proposal was sent but the gateway could not count it; the dreamer must stop for today"}
+		}
 	}
 	return ToolResult{Value: v, Trust: reg.Trust}
 }
