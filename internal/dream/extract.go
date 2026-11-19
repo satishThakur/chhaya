@@ -21,6 +21,7 @@ Rules:
 - One fact per line: never combine two facts into one entry.
 - Write each entry as one short line about the owner in the third person, in the style of the existing lines (for example: "Has already listened to ...", "Enjoys ..."). No quotes from the conversation, no dates, no ids.
 - Choose "path" from the documents listed. 
+- When the owner states several facts, return every one of them, one line each. Do not pick a few.
 - Most conversations hold no new fact. Then return empty lists. A wrong or noisy proposal costs the owner a tap and their trust.
 
 Reply with JSON only, no prose:

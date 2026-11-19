@@ -87,6 +87,14 @@ func runDream(args []string, out io.Writer) error {
 		for _, w := range r.Why {
 			fmt.Fprintf(out, "          %s\n", w)
 		}
+		if !r.Pass {
+			for _, x := range r.Result.Propose {
+				fmt.Fprintf(out, "          proposed: %q (%s, msgs %v)\n", x.Entry, x.Path, x.Source)
+			}
+			for _, x := range r.Result.Contradictions {
+				fmt.Fprintf(out, "          contradiction: %q reverses %s\n", x.Entry, x.Contradicts)
+			}
+		}
 		for _, d := range r.Result.Dropped {
 			fmt.Fprintf(out, "          (filter dropped %q: %s)\n", clipStr(d.Candidate.Entry, 60), d.Reason)
 		}
