@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/satishthakur/chhaya/internal/botguard"
@@ -24,7 +25,7 @@ const dreamUsage = `chhayactl dream run [-s3 URI] [-day D | -trace ID] [-propose
          you typed, none already read (the ledger, ~/.chhaya/dream-ledger.json). -trace ID reads one
          conversation, whatever the ledger says. -budget is the most proposals in one run.
 
-chhayactl dream eval [-cases DIR] [-memory DIR] [-env-file FILE] [-model M] [-runs N]
+chhayactl dream eval [-cases DIR] [-memory DIR] [-env-file FILE] [-model M] [-runs N] [-only TEXT]
 
   eval   run the extractor (a model that reads one conversation and the memory and suggests facts)
          through the filter, on every case, and check the outcome: the facts that must come back
@@ -50,6 +51,7 @@ func runDream(args []string, out io.Writer) error {
 	mem := fs.String("memory", "", "also run the private cases in MEMORY/.tests/dream")
 	envFile := fs.String("env-file", "deploy/.env.hermes", "file holding PROXY_API_KEY and CHHAYA_HERMES_API_BASE")
 	model := fs.String("model", "claude-sonnet-5-5", "the extractor model")
+	only := fs.String("only", "", "run only the cases whose id contains this text")
 	runs := fs.Int("runs", 1, "run each case this many times; the model is not deterministic")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
@@ -79,8 +81,17 @@ func runDream(args []string, out io.Writer) error {
 			all = append(all, priv...)
 		}
 	}
+	if *only != "" {
+		var keep []dream.Case
+		for _, c := range all {
+			if strings.Contains(c.ID, *only) {
+				keep = append(keep, c)
+			}
+		}
+		all = keep
+	}
 	if len(all) == 0 {
-		return fmt.Errorf("no cases in %s", *cases)
+		return fmt.Errorf("no cases match in %s", *cases)
 	}
 	m := newMemModel(base, key, *model)
 	if h, ok := m.(*memrun.HTTPModel); ok {
