@@ -233,3 +233,21 @@ func clip(s string, n int) string {
 	}
 	return s
 }
+
+// FactsIn returns the fact lines of one document's text, as memory.get returns it. A line with no
+// proposal id is skipped here; Check is what reports it.
+func FactsIn(path, body string) []Fact {
+	var out []Fact
+	for _, ln := range strings.Split(body, "\n") {
+		if !strings.HasPrefix(ln, "- ") {
+			continue
+		}
+		m := provenance.FindStringSubmatch(ln)
+		if m == nil {
+			continue
+		}
+		text := strings.TrimSpace(strings.TrimPrefix(provenance.ReplaceAllString(ln, ""), "- "))
+		out = append(out, Fact{ID: m[1], Path: path, Text: text})
+	}
+	return out
+}

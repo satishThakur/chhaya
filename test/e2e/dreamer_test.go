@@ -23,6 +23,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/satishthakur/chhaya/internal/audit"
+	"github.com/satishthakur/chhaya/internal/dream"
 	"github.com/satishthakur/chhaya/internal/mcpsrv"
 	"github.com/satishthakur/chhaya/internal/memory"
 	"github.com/satishthakur/chhaya/internal/policy"
@@ -290,5 +291,41 @@ func TestHermesKeepsItsTools(t *testing.T) {
 	}
 	if rec := lastActorRecord(t, f, "capabilities"); rec.Actor != "hermes" || rec.Decision != "allow" {
 		t.Fatalf("%+v", rec)
+	}
+}
+
+// The dreamer's own client (internal/dream.MCPGateway), against the real gateway over mTLS.
+func TestTheDreamerClientListsReadsAndProposes(t *testing.T) {
+	f := startGateway(t)
+	dreamer := f.ca.issue(t, "dreamer", false)
+	hc := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{dreamer}, InsecureSkipVerify: true}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	gw, err := dream.NewMCPGateway(ctx, f.url, hc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gw.Close()
+	paths, err := gw.List(ctx)
+	if err != nil || len(paths) != 1 || paths[0] != "interests" {
+		t.Fatalf("%v %v", paths, err)
+	}
+	body, err := gw.Get(ctx, "interests")
+	if err != nil || !strings.Contains(body, "Loves books") {
+		t.Fatalf("%q %v", body, err)
+	}
+	if _, err := gw.Get(ctx, ".tests/probes"); err == nil {
+		t.Fatal("the dreamer's client read the memory tests")
+	}
+	if err := gw.Propose(ctx, "interests", "Has heard Foo.", "said so (trace t, msg 1)"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.notes.sent) != 1 || f.notes.sent[0].Entry != "Has heard Foo." {
+		t.Fatalf("the approver saw %+v", f.notes.sent)
+	}
+	// the cap in this fixture is 2: a third is refused with the gateway's own words
+	gw.Propose(ctx, "interests", "Has heard Bar.", "x")
+	if err := gw.Propose(ctx, "interests", "Has heard Baz.", "x"); err == nil || !strings.Contains(err.Error(), "limit is 2") {
+		t.Fatalf("%v", err)
 	}
 }

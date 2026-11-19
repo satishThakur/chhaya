@@ -14,7 +14,17 @@ import (
 	"github.com/satishthakur/chhaya/internal/memrun"
 )
 
-const dreamUsage = `chhayactl dream eval [-cases DIR] [-memory DIR] [-env-file FILE] [-model M] [-runs N]
+const dreamUsage = `chhayactl dream run [-s3 URI] [-day D | -trace ID] [-propose] [-budget 5] [-certs DIR] [-gateway URL]
+
+  run    read conversations from the trace bucket, one at a time, with the memory agent: a model that
+         looks in memory (memory.list, memory.get over mTLS, as the "dreamer") and proposes the facts
+         you stated that memory lacks. Without -propose it is a dry run: it prints what it would send
+         and sends nothing. With -propose each line reaches you as an approver card; nothing is written
+         until you tap. Default: yesterday and today (IST), only Telegram conversations with a message
+         you typed, none already read (the ledger, ~/.chhaya/dream-ledger.json). -trace ID reads one
+         conversation, whatever the ledger says. -budget is the most proposals in one run.
+
+chhayactl dream eval [-cases DIR] [-memory DIR] [-env-file FILE] [-model M] [-runs N]
 
   eval   run the extractor (a model that reads one conversation and the memory and suggests facts)
          through the filter, on every case, and check the outcome: the facts that must come back
@@ -27,6 +37,9 @@ const dreamUsage = `chhayactl dream eval [-cases DIR] [-memory DIR] [-env-file F
 `
 
 func runDream(args []string, out io.Writer) error {
+	if len(args) > 0 && args[0] == "run" {
+		return runDreamRun(args[1:], out, realDreamRunDeps())
+	}
 	if len(args) == 0 || args[0] != "eval" {
 		fmt.Fprint(out, dreamUsage)
 		return fmt.Errorf("usage: chhayactl dream eval")

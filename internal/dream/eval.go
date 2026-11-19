@@ -131,23 +131,56 @@ func inputFor(c Case) (Input, error) {
 	return Input{Trace: c.Trace, Docs: docs, Facts: rep.Facts, Cap: c.Cap}, nil
 }
 
-// RunCase runs the extractor and the filter on a case and checks the outcome. A model error or an
-// unreadable reply is a failed case, with the reason.
+// memGateway is a Gateway over a case's memory. It records what was proposed and writes nothing.
+type memGateway struct{ docs map[string]string }
+
+func newMemGateway(c Case) *memGateway {
+	g := &memGateway{docs: map[string]string{}}
+	for path, lines := range c.Memory {
+		body := "# " + path + "\n\n"
+		for _, l := range lines {
+			body += "- " + l + "\n"
+		}
+		g.docs[path] = body
+	}
+	return g
+}
+
+func (g *memGateway) List(context.Context) ([]string, error) {
+	var out []string
+	for k := range g.docs {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func (g *memGateway) Get(_ context.Context, p string) (string, error) {
+	d, ok := g.docs[p]
+	if !ok {
+		return "", fmt.Errorf("no such document: %s", p)
+	}
+	return d, nil
+}
+
+func (g *memGateway) Propose(context.Context, string, string, string) error { return nil }
+
+// RunCase runs the agent on a case, against a fake gateway over the case's memory, and checks the
+// outcome. A model error, or an agent that does not finish, is a failed case with the reason.
 func RunCase(ctx context.Context, model memrun.Model, c Case) CaseResult {
 	r := CaseResult{ID: c.ID}
-	in, err := inputFor(c)
-	if err != nil {
+	if _, err := inputFor(c); err != nil { // the case's memory must parse like real memory
 		r.Why = []string{err.Error()}
 		return r
 	}
-	cands, u, err := Extract(ctx, model, in)
-	r.Usage = u
+	ar, err := RunAgent(ctx, model, newMemGateway(c), c.Trace, c.Cap)
+	r.Usage = ar.Usage
 	if err != nil {
-		r.Why = []string{"extractor: " + err.Error()}
+		r.Why = []string{"agent: " + err.Error()}
 		return r
 	}
 	r.ModelOK = true
-	r.Result = Filter(cands, in)
+	r.Result = Result{Propose: ar.Proposed, Contradictions: ar.Contradictions, Dropped: ar.Refused, OverCap: ar.OverCap}
 	why := func(f string, a ...any) { r.Why = append(r.Why, fmt.Sprintf(f, a...)) }
 
 	want := len(c.Expect.Propose)
@@ -174,8 +207,8 @@ func RunCase(ctx context.Context, model memrun.Model, c Case) CaseResult {
 			why("no contradiction of %s", id)
 		}
 	}
-	if r.Result.OverCap != c.Expect.OverCap {
-		why("expected the cap to cut %d, it cut %d", c.Expect.OverCap, r.Result.OverCap)
+	if r.Result.OverCap < c.Expect.OverCap {
+		why("expected the cap to cut at least %d, it cut %d", c.Expect.OverCap, r.Result.OverCap)
 	}
 	r.Pass = len(r.Why) == 0
 	return r

@@ -594,3 +594,69 @@ func TestDreamEvalRunsTheShippedCasesAndFailsOnAMiss(t *testing.T) {
 		t.Fatal("an unknown subcommand must be an error")
 	}
 }
+
+type fakeDreamGW struct{ proposed []string }
+
+func (f *fakeDreamGW) List(context.Context) ([]string, error) { return []string{"interests"}, nil }
+func (f *fakeDreamGW) Get(context.Context, string) (string, error) {
+	return "# I\n\n- Loves books. <!-- proposal 20261106-3f609264ada59fd2, approved 2026-11-06 -->\n", nil
+}
+func (f *fakeDreamGW) Propose(_ context.Context, p, e, r string) error {
+	f.proposed = append(f.proposed, p+"|"+e+"|"+r)
+	return nil
+}
+func (f *fakeDreamGW) Close() error { return nil }
+
+func TestDreamRunDryRunThenProposeOnAnOldTrace(t *testing.T) {
+	evals := t.TempDir()
+	os.MkdirAll(filepath.Join(evals, "days", "2026-11-16"), 0o755)
+	tr := `{"schema":2,"id":"old1","day":"2026-11-16","source":"telegram","started":"2026-11-16T04:00:00Z","last_message":"2026-11-16T04:05:00Z","messages":[` +
+		`{"id":7,"role":"user","time":"2026-11-16T04:00:00Z","content":"I already heard the Foo series"},` +
+		`{"id":8,"role":"assistant","time":"2026-11-16T04:00:05Z","content":"Noted."}]}`
+	os.WriteFile(filepath.Join(evals, "days", "2026-11-16", "trace-old1.json"), []byte(tr), 0o644)
+	envf := filepath.Join(t.TempDir(), "env")
+	os.WriteFile(envf, []byte("PROXY_API_KEY=k\nCHHAYA_HERMES_API_BASE=http://x/v1\n"), 0o600)
+	call := `{"path":"interests","entry":"Has already heard the Foo series.","rationale":"said so","source":[7]}`
+	newMemModel = func(string, string, string) memrun.Model {
+		return &fakeMemModel{replies: []memrun.Message{
+			{Role: "assistant", ToolCalls: []memrun.ToolCall{{ID: "1", Name: "propose_fact", Args: call}}},
+			{Role: "assistant", Content: "done"},
+		}}
+	}
+	gw := &fakeDreamGW{}
+	d := dreamRunDeps{now: func() time.Time { return time.Date(2026, 11, 19, 3, 0, 0, 0, time.UTC) },
+		run:     func(string, ...string) ([]byte, error) { return nil, errors.New("no aws") },
+		connect: func(context.Context, string, string) (dreamGateway, error) { return gw, nil }}
+	ledger := filepath.Join(t.TempDir(), "ledger.json")
+	base := []string{"-dir", evals, "-day", "2026-11-16", "-env-file", envf, "-ledger", ledger}
+
+	var out bytes.Buffer
+	if err := runDreamRun(base, &out, d); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if len(gw.proposed) != 0 || !strings.Contains(out.String(), "would propose (dry run)") {
+		t.Fatalf("a dry run must send nothing:\n%s", out.String())
+	}
+
+	newMemModel = func(string, string, string) memrun.Model {
+		return &fakeMemModel{replies: []memrun.Message{
+			{Role: "assistant", ToolCalls: []memrun.ToolCall{{ID: "1", Name: "propose_fact", Args: call}}},
+			{Role: "assistant", Content: "done"},
+		}}
+	}
+	out.Reset()
+	if err := runDreamRun(append(base, "-propose"), &out, d); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if len(gw.proposed) != 1 || !strings.Contains(gw.proposed[0], "trace old1, msg 7") {
+		t.Fatalf("%v\n%s", gw.proposed, out.String())
+	}
+	// the conversation is now in the ledger: a second real run reads nothing
+	out.Reset()
+	if err := runDreamRun(append(base, "-propose"), &out, d); err != nil || !strings.Contains(out.String(), "read 0, skipped 1") {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if err := runDreamRun([]string{"-trace", "nope", "-dir", evals, "-env-file", envf}, &out, d); err == nil {
+		t.Fatal("an unknown trace id must be an error")
+	}
+}
