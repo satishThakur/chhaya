@@ -1,0 +1,42 @@
+{
+ "id": "silence-assistant-config",
+ "note": "From the first real dry run (2026-11-19): the owner says they installed a plugin that resets the assistant's session. That is the assistant's configuration, not a fact about the owner's life.",
+ "cap": 5,
+ "memory": {
+  "interests": [
+   "Loves reading books. <!-- proposal 20261102-aaaaaaaaaaaaaaab, approved 2026-11-02 -->"
+  ]
+ },
+ "trace": {
+  "id": "synthetic",
+  "source": "telegram",
+  "messages": [
+   {
+    "id": 1,
+    "role": "user",
+    "content": "hi"
+   },
+   {
+    "id": 2,
+    "role": "assistant",
+    "content": "Hi. What do you need?"
+   },
+   {
+    "id": 3,
+    "role": "user",
+    "content": "why did you not forget our old chat? i had set up a plugin that clears your context after an hour idle"
+   },
+   {
+    "id": 4,
+    "role": "assistant",
+    "content": "The plugin is enabled with an idle limit of 60 minutes; this chat was resumed 50 minutes in."
+   },
+   {
+    "id": 5,
+    "role": "user",
+    "content": "ok and i also turned on the setting that makes you reply in short sentences"
+   }
+  ]
+ },
+ "expect": {}
+}
