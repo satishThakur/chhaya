@@ -1,0 +1,26 @@
+{
+ "id": "silence-thanks",
+ "cap": 5,
+ "memory": {
+  "interests": [
+   "Loves reading books. <!-- proposal 20261105-0abc000000007bbc, approved 2026-11-05 -->"
+  ]
+ },
+ "trace": {
+  "id": "synthetic",
+  "source": "telegram",
+  "messages": [
+   {
+    "id": 1,
+    "role": "user",
+    "content": "thanks, the digest looked fine"
+   },
+   {
+    "id": 2,
+    "role": "assistant",
+    "content": "Glad it helps."
+   }
+  ]
+ },
+ "expect": {}
+}

@@ -1,0 +1,43 @@
+{
+ "id": "recall-read-book",
+ "cap": 5,
+ "memory": {
+  "interests": [
+   "Loves reading books. <!-- proposal 20261103-0abc000000003dde, approved 2026-11-03 -->"
+  ]
+ },
+ "trace": {
+  "id": "synthetic",
+  "source": "telegram",
+  "messages": [
+   {
+    "id": 1,
+    "role": "user",
+    "content": "find me a good book on logic"
+   },
+   {
+    "id": 2,
+    "role": "assistant",
+    "content": "Try 'The Lantern Proof' by M. Okoro."
+   },
+   {
+    "id": 3,
+    "role": "user",
+    "content": "I read that last year and loved it. Something different please."
+   }
+  ]
+ },
+ "expect": {
+  "propose": [
+   {
+    "path": "interests",
+    "all": [
+     "lantern proof"
+    ],
+    "source": [
+     3
+    ]
+   }
+  ]
+ }
+}

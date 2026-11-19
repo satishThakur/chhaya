@@ -15,6 +15,7 @@ import (
 // (https://api.anthropic.com/v1). The key is sent as a bearer token and never appears in an error.
 type HTTPModel struct {
 	Base, Key, Model string
+	MaxTokens        int // reply limit; 0 means 1024
 	Client           *http.Client
 }
 
@@ -36,7 +37,11 @@ type wireMsg struct {
 
 func (h *HTTPModel) Chat(ctx context.Context, msgs []Message, tools []ToolDef) (Message, Usage, error) {
 	// No temperature: this API rejects it for current models (HTTP 400, 2026-11-17).
-	req := map[string]any{"model": h.Model, "max_tokens": 1024}
+	mt := h.MaxTokens
+	if mt == 0 {
+		mt = 1024
+	}
+	req := map[string]any{"model": h.Model, "max_tokens": mt}
 	var wm []wireMsg
 	for _, m := range msgs {
 		w := wireMsg{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallID}

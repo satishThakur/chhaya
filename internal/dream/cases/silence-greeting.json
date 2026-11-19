@@ -1,0 +1,36 @@
+{
+ "id": "silence-greeting",
+ "cap": 5,
+ "memory": {
+  "interests": [
+   "Loves reading books. <!-- proposal 20261104-0abc000000005ccd, approved 2026-11-04 -->"
+  ]
+ },
+ "trace": {
+  "id": "synthetic",
+  "source": "telegram",
+  "messages": [
+   {
+    "id": 1,
+    "role": "user",
+    "content": "hi"
+   },
+   {
+    "id": 2,
+    "role": "assistant",
+    "content": "Hello! What can I do?"
+   },
+   {
+    "id": 3,
+    "role": "user",
+    "content": "what's the weather in Pune today?"
+   },
+   {
+    "id": 4,
+    "role": "assistant",
+    "content": "Around 28 degrees and clear."
+   }
+  ]
+ },
+ "expect": {}
+}

@@ -429,3 +429,8 @@ func chatModel(t *trace.Trace) []Finding {
 	}
 	return []Finding{f(0, "chat conversation ran on %s", t.Model)}
 }
+
+// IsHuman reports whether m was typed by the owner: a user message that is not a cron delivery,
+// a delegation result or another note the system injected under the user role. The dreaming
+// pipeline uses the same rule to decide what may be the source of a memory fact.
+func IsHuman(m trace.Message) bool { return isHuman(m) && !m.Inactive }

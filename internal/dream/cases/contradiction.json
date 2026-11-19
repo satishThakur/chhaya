@@ -1,0 +1,36 @@
+{
+ "id": "contradiction",
+ "note": "The owner reverses a stored fact: shown as a contradiction naming that fact, never a silent add.",
+ "cap": 5,
+ "memory": {
+  "interests": [
+   "Prefers Hindi movies to other languages. <!-- proposal 20261109-0abc00000000f778, approved 2026-11-09 -->"
+  ]
+ },
+ "trace": {
+  "id": "synthetic",
+  "source": "telegram",
+  "messages": [
+   {
+    "id": 1,
+    "role": "user",
+    "content": "suggest a movie for tonight"
+   },
+   {
+    "id": 2,
+    "role": "assistant",
+    "content": "A Hindi thriller, since you prefer Hindi movies?"
+   },
+   {
+    "id": 3,
+    "role": "user",
+    "content": "not any more, I don't watch Hindi movies now, only Malayalam"
+   }
+  ]
+ },
+ "expect": {
+  "contradict": [
+   "20261109-0abc00000000f778"
+  ]
+ }
+}

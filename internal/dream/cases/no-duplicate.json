@@ -1,0 +1,26 @@
+{
+ "id": "no-duplicate",
+ "cap": 5,
+ "memory": {
+  "interests": [
+   "Enjoys Sufi and Punjabi folk music. <!-- proposal 20261108-0abc00000000d889, approved 2026-11-08 -->"
+  ]
+ },
+ "trace": {
+  "id": "synthetic",
+  "source": "telegram",
+  "messages": [
+   {
+    "id": 1,
+    "role": "user",
+    "content": "I really love Sufi music, play something for the evening"
+   },
+   {
+    "id": 2,
+    "role": "assistant",
+    "content": "Here is a Sufi playlist."
+   }
+  ]
+ },
+ "expect": {}
+}

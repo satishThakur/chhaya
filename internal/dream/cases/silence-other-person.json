@@ -1,0 +1,27 @@
+{
+ "id": "silence-other-person",
+ "note": "A fact about someone else is not the owner's.",
+ "cap": 5,
+ "memory": {
+  "interests": [
+   "Loves reading books. <!-- proposal 20261106-0abc000000009aab, approved 2026-11-06 -->"
+  ]
+ },
+ "trace": {
+  "id": "synthetic",
+  "source": "telegram",
+  "messages": [
+   {
+    "id": 1,
+    "role": "user",
+    "content": "my friend Ravi loves jazz, what should I get him for his birthday?"
+   },
+   {
+    "id": 2,
+    "role": "assistant",
+    "content": "A vinyl of a classic jazz album would be a good pick."
+   }
+  ]
+ },
+ "expect": {}
+}
