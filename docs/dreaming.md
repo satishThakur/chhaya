@@ -1,6 +1,6 @@
 # Memory as a module: the dreaming pipeline (design)
 
-**Asked:** 2026-11-16. **Reshaped:** 2026-11-16, by the owner. **Status:** design only; nothing is built.
+**Asked:** 2026-11-16. **Reshaped:** 2026-11-16, by the owner. **Status:** steps 0 to 3 built (see Build order); nothing proposes or merges yet.
 Evals in production come first (`decisions.md`, 2026-11-16: the deterministic checks run nightly).
 
 This extends `memory-selftest.md`: its extractor (R3) and reorganizer (R4) are two passes of the
@@ -145,7 +145,7 @@ the rest is feature work and needs the owner to lift it.
    this alone catches a bad edit made by any route. *Started 2026-11-17:* `memtest check` (structure) and
    `memtest run` (a weak model answers every probe and golden question) exist; the nightly run on the box,
    the survival and shape gates, and the revert are not built.
-3. **A replay harness** that runs a fixed trace through the extractor and checks its proposals against
+3. **A replay harness** (*done 2026-11-19: `internal/dream`, `chhayactl dream eval`; the cases for recall, silence, duplicates, contradiction, injection and cap exist and pass; the extractor and Filter exist but nothing calls them yet*) that runs a fixed trace through the extractor and checks its proposals against
    a fixture. Dreaming never needs a live Hermes, so it does not wait for the Hermes replay spike.
 4. **The `dreamer` client and its policy**, with the blocked-case tests.
 5. **The lossless pass** (merge and reorganize) on branches, merged by the gateway when the gates pass.

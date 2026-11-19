@@ -168,3 +168,9 @@ Reads keep working while stopped, on purpose — a gateway that cannot answer
 | Every memory card answers "⚠️ not written: the approver cannot write its audit log" | An approver audit append failed and the approver latched: no approve or reject acts until a restart. Fix the disk, then restart; the proposals are still pending and come back as fresh cards. |
 | A memory tap says "⚠️ not written" with a permission error | The gateway runs as your uid, so files in `~/.chhaya/gateway/memory` should be yours. Check `find ~/.chhaya/gateway/memory ! -user $(id -u)`; anything left over from the old uid-10001 gateway needs `chown`. Then tap the same card again. |
 | Duplicate memory cards, older ones answering "that card has expired" | Every gateway start re-posts a card for every pending proposal, and cards from an earlier process are dead. A crash loop posts a set per restart. Tap the newest card. |
+
+## Extractor evals (`chhayactl dream eval`)
+
+`bin/chhayactl dream eval [-runs 3] [-memory ~/.chhaya/gateway/memory]` runs the extractor on the shipped synthetic
+cases and on any private cases in `MEMORY/.tests/dream/*.json` (the real podcast conversation is there). It costs
+about 12k tokens in a run and proposes nothing. Run it after any change to `internal/dream/extract.go`.

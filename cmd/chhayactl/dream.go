@@ -14,7 +14,7 @@ import (
 	"github.com/satishthakur/chhaya/internal/memrun"
 )
 
-const dreamUsage = `chhayactl dream eval [-cases DIR] [-memory DIR] [-env-file FILE] [-model M]
+const dreamUsage = `chhayactl dream eval [-cases DIR] [-memory DIR] [-env-file FILE] [-model M] [-runs N]
 
   eval   run the extractor (a model that reads one conversation and the memory and suggests facts)
          through the filter, on every case, and check the outcome: the facts that must come back
@@ -37,6 +37,7 @@ func runDream(args []string, out io.Writer) error {
 	mem := fs.String("memory", "", "also run the private cases in MEMORY/.tests/dream")
 	envFile := fs.String("env-file", "deploy/.env.hermes", "file holding PROXY_API_KEY and CHHAYA_HERMES_API_BASE")
 	model := fs.String("model", "claude-sonnet-5-5", "the extractor model")
+	runs := fs.Int("runs", 1, "run each case this many times; the model is not deterministic")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -76,14 +77,33 @@ func runDream(args []string, out io.Writer) error {
 	defer cancel()
 	var failed, in, outTok int
 	fmt.Fprintf(out, "extractor %s, %d case(s)\n", *model, len(all))
+	if *runs < 1 {
+		return fmt.Errorf("-runs must be at least 1")
+	}
 	for _, c := range all {
-		r := dream.RunCase(ctx, m, c)
-		in, outTok = in+r.Usage.In, outTok+r.Usage.Out
+		var r dream.CaseResult
+		passed := 0
+		for i := 0; i < *runs; i++ {
+			x := dream.RunCase(ctx, m, c)
+			in, outTok = in+x.Usage.In, outTok+x.Usage.Out
+			if x.Pass {
+				passed++
+			} else if r.Why == nil || r.Pass {
+				r = x // keep the first failing run to show
+			}
+			if i == 0 && x.Pass {
+				r = x
+			}
+		}
+		r.Pass = passed == *runs
 		tag := "pass"
 		if !r.Pass {
 			tag, failed = "FAIL", failed+1
 		}
-		fmt.Fprintf(out, "  %-4s  %s\n", tag, c.ID)
+		if *runs > 1 {
+			tag += fmt.Sprintf(" %d/%d", passed, *runs)
+		}
+		fmt.Fprintf(out, "  %-8s  %s\n", tag, c.ID)
 		for _, w := range r.Why {
 			fmt.Fprintf(out, "          %s\n", w)
 		}

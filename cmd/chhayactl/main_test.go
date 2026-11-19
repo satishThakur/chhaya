@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -585,7 +586,7 @@ func TestDreamEvalRunsTheShippedCasesAndFailsOnAMiss(t *testing.T) {
 	}
 	var out bytes.Buffer
 	err := runDream([]string{"eval", "-cases", "../../internal/dream/cases", "-env-file", envf}, &out)
-	if err == nil || !strings.Contains(out.String(), "FAIL  recall-heard") || !strings.Contains(out.String(), "pass  silence-greeting") {
+	if err == nil || !regexp.MustCompile(`FAIL +recall-heard`).MatchString(out.String()) || !regexp.MustCompile(`pass +silence-greeting`).MatchString(out.String()) {
 		t.Fatalf("a model that proposes nothing must fail the recall cases and pass the silence ones:\n%s\n%v", out.String(), err)
 	}
 	if err := runDream([]string{"nonsense"}, &out); err == nil {
