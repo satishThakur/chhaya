@@ -32,6 +32,7 @@ type TraceResult struct {
 	Contradictions []Candidate
 	Refused        []Drop
 	Quotes         map[int64]string
+	First          string // the owner's first message, so a reader can tell conversations apart
 	Err            string
 }
 
@@ -93,7 +94,7 @@ func RunTraces(ctx context.Context, model memrun.Model, gw Gateway, traces []*tr
 		r, err := RunAgent(ctx, model, gw, t, per)
 		s.Usage.In, s.Usage.Out = s.Usage.In+r.Usage.In, s.Usage.Out+r.Usage.Out
 		tr := TraceResult{ID: t.ID, Day: t.Day, Messages: len(t.Messages), Proposed: r.Proposed,
-			Contradictions: r.Contradictions, Refused: r.Refused, Quotes: quotes(t, r)}
+			Contradictions: r.Contradictions, Refused: r.Refused, Quotes: quotes(t, r), First: firstOwner(t)}
 		if err != nil {
 			s.Errors++
 			tr.Err = err.Error()
@@ -160,4 +161,13 @@ func quotes(t *trace.Trace, r AgentResult) map[int64]string {
 		}
 	}
 	return out
+}
+
+func firstOwner(t *trace.Trace) string {
+	for _, m := range t.Messages {
+		if check.IsHuman(m) {
+			return clip(m.Content, 140)
+		}
+	}
+	return ""
 }

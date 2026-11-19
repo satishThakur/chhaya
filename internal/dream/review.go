@@ -12,7 +12,7 @@ type reviewItem struct {
 	N                         int
 	ID, Day, Path, Entry, Why string
 	Reason, Contradicts       string
-	Msgs                      string
+	Msgs, First               string
 	Quotes                    []string
 	Messages                  int
 }
@@ -54,8 +54,9 @@ code{font-size:.85em}details summary{cursor:pointer}
 {{else}}<p class="mut">None.</p>{{end}}
 
 <h2>Nothing to save ({{len .None}})</h2>
+<p class="mut">If you remember stating a fact in one of these and it is missing from "Would propose", that is a miss: tell me which.</p>
 <details><summary>{{len .None}} conversation(s) with no new fact</summary>
-{{range .None}}<div class="mut"><code>{{.ID}}</code> {{.Day}} · {{.Messages}} messages</div>{{end}}</details>
+{{range .None}}<div class="mut"><code>{{.ID}}</code> {{.Day}} · {{.Messages}} messages{{if .First}} · “{{.First}}”{{end}}</div>{{end}}</details>
 
 <h2>Errors ({{len .Errs}})</h2>
 {{range .Errs}}<div class="card"><code>{{.ID}}</code> {{.Day}}: {{.Why}}</div>{{else}}<p class="mut">None.</p>{{end}}
@@ -70,7 +71,7 @@ func ReviewHTML(s Summary, at time.Time) string {
 	var props, contras, refs, none, errs []reviewItem
 	n := 0
 	for _, r := range res {
-		base := reviewItem{ID: r.ID, Day: r.Day, Messages: r.Messages}
+		base := reviewItem{ID: r.ID, Day: r.Day, Messages: r.Messages, First: r.First}
 		quoteFor := func(src []int64) []string {
 			var q []string
 			for _, id := range src {
@@ -113,6 +114,34 @@ func ReviewHTML(s Summary, at time.Time) string {
 	var b strings.Builder
 	if err := reviewPage.Execute(&b, d); err != nil {
 		return "review could not be rendered: " + template.HTMLEscapeString(err.Error())
+	}
+	return b.String()
+}
+
+// SummaryMessage is the Telegram text for a run: a headline, counts and, when there is one, the
+// link to the page. It never holds a line or a quote from a conversation. runErr is why the run
+// could not finish (nil when it did).
+func SummaryMessage(s Summary, propose bool, link, day string, runErr error) string {
+	var b strings.Builder
+	head := "nothing new"
+	switch {
+	case runErr != nil || s.Errors > 0:
+		head = "FAILED"
+	case s.Proposed > 0 && propose:
+		head = fmt.Sprintf("%d proposed, tap the cards", s.Proposed)
+	case s.Proposed > 0:
+		head = fmt.Sprintf("dry run, %d would be proposed", s.Proposed)
+	case !propose:
+		head = "dry run, nothing new"
+	}
+	fmt.Fprintf(&b, "Chhaya dreamer %s: %s\n", day, head)
+	fmt.Fprintf(&b, "read %d conversation(s), skipped %d, deferred %d; %d proposed, %d contradiction(s), %d refused, %d error(s)\n",
+		s.Read, s.Skipped, s.Deferred, s.Proposed, s.Contradictions, s.Refused, s.Errors)
+	if runErr != nil {
+		fmt.Fprintf(&b, "stopped: %v\n", runErr)
+	}
+	if link != "" {
+		fmt.Fprintf(&b, "report: %s\n", link)
 	}
 	return b.String()
 }

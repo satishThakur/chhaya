@@ -15,7 +15,7 @@ import (
 	"github.com/satishthakur/chhaya/internal/memrun"
 )
 
-const dreamUsage = `chhayactl dream run [-s3 URI] [-day D | -all | -trace ID] [-html FILE [-publish]] [-propose] [-budget 5] [-certs DIR] [-gateway URL]
+const dreamUsage = `chhayactl dream run [-s3 URI] [-day D | -all | -trace ID] [-html FILE] [-publish] [-send] [-propose] [-budget 5] [-certs DIR] [-gateway URL]
 
   run    read conversations from the trace bucket, one at a time, with the memory agent: a model that
          looks in memory (memory.list, memory.get over mTLS, as the "dreamer") and proposes the facts
@@ -25,7 +25,8 @@ const dreamUsage = `chhayactl dream run [-s3 URI] [-day D | -all | -trace ID] [-
          you typed, none already read (the ledger, ~/.chhaya/dream-ledger.json). -trace ID reads one
          conversation, whatever the ledger says. -all reads every day in the store. -html FILE writes a review
          page (numbered lines, each with the message you typed); with -publish and -s3 it is uploaded and a
-         presigned link is printed. -budget is the most proposals in one run.
+         presigned link is printed. -send also sends a short summary (counts, never your words) on Telegram
+         with that link, as every job does; a run that could not start sends that too. -budget is the most proposals in one run.
 
 chhayactl dream eval [-cases DIR] [-memory DIR] [-env-file FILE] [-model M] [-runs N] [-only TEXT]
 

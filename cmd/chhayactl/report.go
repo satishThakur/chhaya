@@ -111,15 +111,11 @@ func runReport(args []string, out io.Writer, d reportDeps) error {
 		o.Dir = root
 	}
 	if *send {
-		env, err := botguard.ReadEnvFile(*envFile)
+		token, chat, err := approverTarget(*envFile)
 		if err != nil {
-			return fmt.Errorf("cannot read %s: %w", *envFile, err)
+			return err
 		}
-		chat, cerr := strconv.ParseInt(strings.TrimSpace(env["CHHAYA_APPROVER_ALLOWED_USERS"]), 10, 64)
-		if env["CHHAYA_APPROVER_BOT_TOKEN"] == "" || cerr != nil {
-			return fmt.Errorf("%s needs CHHAYA_APPROVER_BOT_TOKEN and one numeric CHHAYA_APPROVER_ALLOWED_USERS", *envFile)
-		}
-		o.Send = d.sender(env["CHHAYA_APPROVER_BOT_TOKEN"], chat)
+		o.Send = d.sender(token, chat)
 	}
 	msg, err := nightly.Publish(context.Background(), in, o)
 	fmt.Fprint(out, msg)
@@ -130,4 +126,17 @@ func runReport(args []string, out io.Writer, d reportDeps) error {
 		fmt.Fprintln(out, "sent")
 	}
 	return nil
+}
+
+// approverTarget reads the approver bot's token and the one chat id it may write to.
+func approverTarget(envFile string) (string, int64, error) {
+	env, err := botguard.ReadEnvFile(envFile)
+	if err != nil {
+		return "", 0, fmt.Errorf("cannot read %s: %w", envFile, err)
+	}
+	chat, cerr := strconv.ParseInt(strings.TrimSpace(env["CHHAYA_APPROVER_ALLOWED_USERS"]), 10, 64)
+	if env["CHHAYA_APPROVER_BOT_TOKEN"] == "" || cerr != nil {
+		return "", 0, fmt.Errorf("%s needs CHHAYA_APPROVER_BOT_TOKEN and one numeric CHHAYA_APPROVER_ALLOWED_USERS", envFile)
+	}
+	return env["CHHAYA_APPROVER_BOT_TOKEN"], chat, nil
 }

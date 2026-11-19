@@ -879,3 +879,13 @@ second user or inbound access, or the bot naming convention stops being enforcea
 **Consequences.** Not built yet: the client that uses this (`chhayactl dream run`), its cron line, the ledger of processed traces, and the batched card. The dreamer's certificate must be issued on the box (`deploy/issue-client-cert.sh dreamer deploy/certs`) before that client can connect.
 
 **Reopen if:** the dreamer needs a tool that is not memory (then add it to the list in code with its own tests), or a third client appears (then replace the two named actors with a table).
+
+## 2026-11-19: every job reports with a short Telegram summary and a link to a detailed page
+
+**Decision.** A scheduled job does not end in a log file. It sends one short summary on Telegram (a headline, counts and names; never a line or quote from a conversation) and puts the detail on an HTML page in the private bucket, linked from the summary by a presigned URL. `internal/jobreport.Deliver` is the one implementation: it writes the page, uploads it to `s3://BUCKET/evals/reports/NAME.html`, presigns it, builds the summary with the link, sends it, and, if the upload or the send fails, still sends the summary and says the report is missing. The nightly eval report (`chhayactl report nightly`) and the dreamer (`chhayactl dream run -send`) both use it. A job that could not start (the dreamer cannot reach the gateway) sends a FAILED summary too, so no message at all still means the job itself did not run.
+
+**Why.** The owner's rule, stated 2026-11-19 after the evals report worked. The nightly checks wrote to files nobody reads; the dreamer reads personal conversations and proposes memory, so what it did must be visible to its owner without opening a shell. The text stays off Telegram because the chat is a lower-trust place than the private bucket, and the page link is short-lived by design.
+
+**Consequences.** Not yet reporting this way: `backup`, `trace export` and the cost reports (the cost report is itself Telegram messages). The morning report could list whether the backup and export ran; in `docs/backlog.md`. New jobs use `jobreport.Deliver` from the start.
+
+**Reopen if:** the 6-hour link (role credentials) is a nuisance, or the summaries become noise.

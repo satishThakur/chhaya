@@ -9,12 +9,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/satishthakur/chhaya/internal/check"
+	"github.com/satishthakur/chhaya/internal/jobreport"
 	"github.com/satishthakur/chhaya/internal/memrun"
 	"github.com/satishthakur/chhaya/internal/memtest"
 )
@@ -189,54 +189,13 @@ func Message(in Input, link string) string {
 	return b.String()
 }
 
-// Sender is the slice of the approver bot this needs.
-type Sender interface {
-	Send(ctx context.Context, text string) error
-}
+// Sender and PublishOptions are the shared job-report types (internal/jobreport).
+type (
+	Sender         = jobreport.Sender
+	PublishOptions = jobreport.Options
+)
 
-type PublishOptions struct {
-	S3      string        // s3://bucket/evals; empty = do not upload
-	Expires time.Duration // presigned link life
-	Run     func(name string, args ...string) ([]byte, error)
-	Send    Sender // nil = do not send
-	Dir     string // where the HTML is written before upload
-}
-
-// Publish writes the report, uploads and presigns it, and sends the message. An upload or presign
-// failure is returned, but the message still goes out and says the report is missing: a night's
-// failures must not hide behind a broken link.
+// Publish delivers the nightly report: the page in the bucket, then the summary on Telegram.
 func Publish(ctx context.Context, in Input, o PublishOptions) (string, error) {
-	var errs []string
-	link := ""
-	if o.S3 != "" {
-		name := in.day() + ".html"
-		local := filepath.Join(o.Dir, name)
-		if err := os.WriteFile(local, []byte(HTML(in)), 0o600); err != nil {
-			errs = append(errs, "write report: "+err.Error())
-		} else {
-			key := strings.TrimRight(o.S3, "/") + "/reports/" + name
-			if _, err := o.Run("aws", "s3", "cp", "--only-show-errors", "--content-type", "text/html; charset=utf-8", local, key); err != nil {
-				errs = append(errs, "upload report: "+err.Error())
-			} else if out, err := o.Run("aws", "s3", "presign", key, "--expires-in", fmt.Sprint(int(o.Expires.Seconds()))); err != nil {
-				errs = append(errs, "presign report: "+err.Error())
-			} else {
-				link = strings.TrimSpace(string(out))
-			}
-		}
-	}
-	msg := Message(in, link)
-	if o.S3 != "" && link == "" {
-		msg += "report not uploaded: see check.log on the box\n"
-	} else if link != "" {
-		msg += fmt.Sprintf("(link works for %s)\n", o.Expires.Round(time.Minute))
-	}
-	if o.Send != nil {
-		if err := o.Send.Send(ctx, msg); err != nil {
-			errs = append(errs, "send: "+err.Error())
-		}
-	}
-	if len(errs) > 0 {
-		return msg, fmt.Errorf("%s", strings.Join(errs, "; "))
-	}
-	return msg, nil
+	return jobreport.Deliver(ctx, o, in.day(), HTML(in), func(link string) string { return Message(in, link) })
 }
