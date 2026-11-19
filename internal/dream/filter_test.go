@@ -131,3 +131,13 @@ func TestOnlyTelegramConversationsAreEligible(t *testing.T) {
 		t.Fatal("only a telegram conversation can be read for facts")
 	}
 }
+
+func TestAPlainAddRestatingAContradictionIsDropped(t *testing.T) {
+	con := c("interests", "Watches only Malayalam movies now.", 4)
+	con.Contradicts = "20261101-aaaaaaaaaaaaaaaa"
+	add := c("interests", "watches only malayalam movies now", 4)
+	r := Filter([]Candidate{add, con}, in())
+	if len(r.Propose) != 0 || len(r.Contradictions) != 1 {
+		t.Fatalf("one change must be one card: %+v (%s)", r, reasons(r))
+	}
+}

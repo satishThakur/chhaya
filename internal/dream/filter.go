@@ -89,6 +89,14 @@ func Filter(cands []Candidate, in Input) Result {
 		ids[f.ID] = true
 		seen[norm(f.Text)] = true
 	}
+	// A reversed fact is shown once, as a contradiction with its replacement line. A plain add of the
+	// same line would be a second card for one change.
+	contra := map[string]bool{}
+	for _, c := range cands {
+		if c.Contradicts != "" {
+			contra[norm(c.Entry)] = true
+		}
+	}
 	drop := func(c Candidate, why string) { r.Dropped = append(r.Dropped, Drop{c, why}) }
 	for _, c := range cands {
 		entry, err := memory.ValidateEntry(c.Entry)
@@ -121,6 +129,10 @@ func Filter(cands []Candidate, in Input) Result {
 				continue
 			}
 			r.Contradictions = append(r.Contradictions, c)
+			continue
+		}
+		if contra[norm(entry)] {
+			drop(c, "restates a contradiction already reported")
 			continue
 		}
 		if seen[norm(entry)] {

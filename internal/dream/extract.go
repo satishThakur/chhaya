@@ -17,7 +17,7 @@ Rules:
 - Only durable facts about the owner: what they have done, heard, read, own, prefer, dislike, their routine and their circumstances. Not one-off requests, questions, moods, what the assistant said, or facts about other people.
 - If the owner says they already heard/read/watched something, that is a fact worth keeping, named exactly as they named it.
 - Skip anything memory already says (compare meaning, not wording).
-- If the owner reverses a stored fact, do not add a line: put it in "contradictions" with "contradicts" set to the id of the stored fact.
+- If the owner reverses a stored fact, do not also add the new line to "proposals". Put it in "contradictions" once: "entry" is the NEW replacement line, "contradicts" is the id of the stored fact it replaces.
 - One fact per line: never combine two facts into one entry.
 - Write each entry as one short line about the owner in the third person, in the style of the existing lines (for example: "Has already listened to ...", "Enjoys ..."). No quotes from the conversation, no dates, no ids.
 - Choose "path" from the documents listed. 
