@@ -17,13 +17,27 @@ import (
 // sent, but nothing reaches the gateway and nothing is marked done. Ledger may be nil (no memory
 // of what was read).
 type RunOptions struct {
-	Budget  int
-	Propose bool
-	Ledger  *Ledger
+	PerTrace int // most proposals from one conversation; 0 means 5
+	Budget   int
+	Propose  bool
+	Ledger   *Ledger
+}
+
+// TraceResult is what the agent did with one conversation, kept so a report can show it. Quotes
+// maps each cited owner message id to its text, so a reviewer sees what the line came from.
+type TraceResult struct {
+	ID, Day        string
+	Messages       int
+	Proposed       []Candidate
+	Contradictions []Candidate
+	Refused        []Drop
+	Quotes         map[int64]string
+	Err            string
 }
 
 // Summary counts what a run did.
 type Summary struct {
+	Results                                                            []TraceResult
 	Read, Skipped, Deferred, Errors, Proposed, Contradictions, Refused int
 	Usage                                                              memrun.Usage
 }
@@ -69,13 +83,25 @@ func RunTraces(ctx context.Context, model memrun.Model, gw Gateway, traces []*tr
 			continue
 		}
 		fmt.Fprintf(out, "%s  (%s, %d messages)\n", t.ID, t.Day, len(t.Messages))
-		r, err := RunAgent(ctx, model, gw, t, budget)
+		per := o.PerTrace
+		if per <= 0 {
+			per = 5
+		}
+		if budget < per {
+			per = budget
+		}
+		r, err := RunAgent(ctx, model, gw, t, per)
 		s.Usage.In, s.Usage.Out = s.Usage.In+r.Usage.In, s.Usage.Out+r.Usage.Out
+		tr := TraceResult{ID: t.ID, Day: t.Day, Messages: len(t.Messages), Proposed: r.Proposed,
+			Contradictions: r.Contradictions, Refused: r.Refused, Quotes: quotes(t, r)}
 		if err != nil {
 			s.Errors++
+			tr.Err = err.Error()
+			s.Results = append(s.Results, tr)
 			fmt.Fprintf(out, "  ERROR: %v (left for the next run)\n", err)
 			continue
 		}
+		s.Results = append(s.Results, tr)
 		s.Read++
 		verb := "proposed"
 		if !o.Propose {
@@ -107,4 +133,31 @@ func RunTraces(ctx context.Context, model memrun.Model, gw Gateway, traces []*tr
 		return s, fmt.Errorf("%d conversation(s) failed", s.Errors)
 	}
 	return s, nil
+}
+
+// quotes returns the text of every owner message the agent cited.
+func quotes(t *trace.Trace, r AgentResult) map[int64]string {
+	want := map[int64]bool{}
+	for _, c := range r.Proposed {
+		for _, id := range c.Source {
+			want[id] = true
+		}
+	}
+	for _, c := range r.Contradictions {
+		for _, id := range c.Source {
+			want[id] = true
+		}
+	}
+	for _, d := range r.Refused {
+		for _, id := range d.Candidate.Source {
+			want[id] = true
+		}
+	}
+	out := map[int64]string{}
+	for _, m := range t.Messages {
+		if want[m.ID] && check.IsHuman(m) {
+			out[m.ID] = clip(m.Content, 600)
+		}
+	}
+	return out
 }
