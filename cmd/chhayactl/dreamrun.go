@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/satishthakur/chhaya/internal/botguard"
@@ -41,6 +43,10 @@ func runDreamRun(args []string, out io.Writer, d dreamRunDeps) error {
 	s3 := fs.String("s3", "", "s3://bucket/evals prefix to read conversations from")
 	dir := fs.String("dir", evalsDir(), "local evals directory when -s3 is not set")
 	day := fs.String("day", "", "read only this IST day (default: yesterday and today)")
+	all := fs.Bool("all", false, "read every day in the store")
+	htmlOut := fs.String("html", "", "also write a review page (what it would propose, with the owner's words) to this file")
+	publish := fs.Bool("publish", false, "with -html and -s3: upload the page to the bucket and print a presigned link")
+	expires := fs.Duration("expires", 6*time.Hour, "how long the link works")
 	only := fs.String("trace", "", "read only this trace id, ignoring the ledger")
 	propose := fs.Bool("propose", false, "send proposals to the approver (default: dry run)")
 	budget := fs.Int("budget", 5, "most proposals in this run")
@@ -85,6 +91,21 @@ func runDreamRun(args []string, out io.Writer, d dreamRunDeps) error {
 	}
 	st := &trace.Store{Dir: root, S3: *s3, Run: d.run, Now: d.now}
 	var traces []*trace.Trace
+	if *all {
+		refs, err := st.Index()
+		if err != nil {
+			return err
+		}
+		seen := map[string]bool{}
+		days = nil
+		for _, r := range refs {
+			if !seen[r.Day] {
+				seen[r.Day] = true
+				days = append(days, r.Day)
+			}
+		}
+		sort.Strings(days)
+	}
 	if *only != "" {
 		days = nil
 		refs, err := st.Index()
@@ -141,5 +162,26 @@ func runDreamRun(args []string, out io.Writer, d dreamRunDeps) error {
 	}
 	fmt.Fprintf(out, "read %d, skipped %d, deferred %d, errors %d; %d proposal(s) (%s), %d contradiction(s), %d refused; %d tokens in, %d out\n",
 		sum.Read, sum.Skipped, sum.Deferred, sum.Errors, sum.Proposed, mode, sum.Contradictions, sum.Refused, sum.Usage.In, sum.Usage.Out)
+	if *htmlOut != "" {
+		page := dream.ReviewHTML(sum, d.now())
+		if werr := os.WriteFile(*htmlOut, []byte(page), 0o600); werr != nil {
+			return werr
+		}
+		fmt.Fprintf(out, "review page written to %s\n", *htmlOut)
+		if *publish {
+			if *s3 == "" {
+				return fmt.Errorf("-publish needs -s3")
+			}
+			key := strings.TrimRight(*s3, "/") + "/reports/dream-" + d.now().In(trace.IST).Format("2006-01-02") + ".html"
+			if _, perr := d.run("aws", "s3", "cp", "--only-show-errors", "--content-type", "text/html; charset=utf-8", *htmlOut, key); perr != nil {
+				return fmt.Errorf("upload: %w", perr)
+			}
+			link, perr := d.run("aws", "s3", "presign", key, "--expires-in", fmt.Sprint(int(expires.Seconds())))
+			if perr != nil {
+				return fmt.Errorf("presign: %w", perr)
+			}
+			fmt.Fprintf(out, "review link (works for %s): %s", expires.Round(time.Minute), link)
+		}
+	}
 	return err
 }

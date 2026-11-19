@@ -651,6 +651,21 @@ func TestDreamRunDryRunThenProposeOnAnOldTrace(t *testing.T) {
 	if len(gw.proposed) != 1 || !strings.Contains(gw.proposed[0], "trace old1, msg 7") {
 		t.Fatalf("%v\n%s", gw.proposed, out.String())
 	}
+	// a dry run with -html leaves a review page that quotes the owner
+	newMemModel = func(string, string, string) memrun.Model {
+		return &fakeMemModel{replies: []memrun.Message{
+			{Role: "assistant", ToolCalls: []memrun.ToolCall{{ID: "1", Name: "propose_fact", Args: call}}},
+			{Role: "assistant", Content: "done"},
+		}}
+	}
+	page := filepath.Join(t.TempDir(), "review.html")
+	out.Reset()
+	if err := runDreamRun(append(append([]string{}, base...), "-html", page), &out, d); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if b, _ := os.ReadFile(page); !strings.Contains(string(b), "Would propose (1)") || !strings.Contains(string(b), "I already heard the Foo series") {
+		t.Fatalf("the review page lacks the proposal or the owner's words:\n%s", b)
+	}
 	// the conversation is now in the ledger: a second real run reads nothing
 	out.Reset()
 	if err := runDreamRun(append(base, "-propose"), &out, d); err != nil || !strings.Contains(out.String(), "read 0, skipped 1") {

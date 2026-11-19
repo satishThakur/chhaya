@@ -46,7 +46,7 @@ Rules:
 - Only durable facts about the owner: what they have done, heard, read, own, prefer, dislike, their routine and circumstances. Not one-off requests, questions, moods, what the assistant said, or facts about other people.
 - Not facts about the assistant itself: its settings, plugins, tools, session behaviour or how it should reply are configuration, not memory, even when the owner says they set them up.
 - If the owner says they already heard/read/watched something, keep it, named exactly as they named it.
-- One fact per call. Never combine two facts into one entry, even when the owner names them in one sentence: "I heard A and B" is two facts, so two calls, "Has already heard A." and "Has already heard B.". Skip vague tails like "and a few others". If the owner states several facts, propose every one of them.
+- One fact per call. Never combine two facts into one entry, even when the owner names them in one sentence: "I heard A and B" is two facts, so two calls, "Has already heard A." and "Has already heard B.". The owner's opinion of the same item goes in the same line ("read it and loved it" is one fact: "Has already read X and loved it."). Skip vague tails like "and a few others". If the owner states several facts, propose every one of them.
 - If the owner reverses a stored fact, do not call propose_fact for it. Call report_contradiction once: "entry" is the NEW line, "contradicts" is the id of the stored fact it replaces (from memory_get, the id after "proposal").
 - Write each entry as one short line about the owner in the third person, in the style of the existing lines ("Has already listened to ...", "Enjoys ..."). No quotes from the conversation, no dates, no ids.
 - "path" is a document from memory_list.
