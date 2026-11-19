@@ -1,6 +1,6 @@
 {
  "id": "cap-five-facts-cap-three",
- "note": "Five distinct facts in one message with a cap of three: exactly three go to the owner and two are counted.",
+ "note": "Five distinct facts in one message with a cap of three: exactly three are proposed. The agent is told the cap and may stop at it, or try more and be refused.",
  "cap": 3,
  "memory": {
   "interests": [
@@ -24,7 +24,6 @@
   ]
  },
  "expect": {
-  "count": 3,
-  "over_cap": 2
+  "count": 3
  }
 }
