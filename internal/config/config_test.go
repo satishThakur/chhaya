@@ -152,3 +152,36 @@ func TestNoRepoIsWritableWhicheverWayTheKeyIsWritten(t *testing.T) {
 		})
 	}
 }
+
+func TestDreamerSectionIsOptionalAndAbsentMeansOff(t *testing.T) {
+	cfg, _, err := Load(write(t, good))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Dreamer.ProposalsPerDay != 0 || cfg.Dreamer.CallsPerHour != 0 {
+		t.Fatalf("no dreamer section must read as zero, got %+v", cfg.Dreamer)
+	}
+}
+
+func TestDreamerLimitsAreRead(t *testing.T) {
+	cfg, _, err := Load(write(t, good+"dreamer:\n  proposals_per_day: 5\n  calls_per_hour: 300\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Dreamer.ProposalsPerDay != 5 || cfg.Dreamer.CallsPerHour != 300 {
+		t.Fatalf("%+v", cfg.Dreamer)
+	}
+}
+
+func TestDreamerLimitsMustBePositiveAndComplete(t *testing.T) {
+	for name, body := range map[string]string{
+		"zero proposals": "dreamer:\n  proposals_per_day: 0\n  calls_per_hour: 300\n",
+		"negative calls": "dreamer:\n  proposals_per_day: 5\n  calls_per_hour: -1\n",
+		"one missing":    "dreamer:\n  proposals_per_day: 5\n",
+		"unknown key":    "dreamer:\n  proposals_per_day: 5\n  calls_per_hour: 300\n  can_merge: true\n",
+	} {
+		if _, _, err := Load(write(t, good+body)); err == nil {
+			t.Errorf("%s: must be refused", name)
+		}
+	}
+}

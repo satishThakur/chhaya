@@ -168,6 +168,12 @@ func runExplain(policyFile string, out io.Writer) error {
 	} else {
 		fmt.Fprintf(out, "repos:       %v\n", cfg.Repos)
 	}
+	if cfg.Dreamer.ProposalsPerDay > 0 && cfg.Dreamer.CallsPerHour > 0 {
+		fmt.Fprintf(out, "dreamer:     memory.list, memory.get, memory.propose_update only; %d proposals a day, %d calls an hour\n",
+			cfg.Dreamer.ProposalsPerDay, cfg.Dreamer.CallsPerHour)
+	} else {
+		fmt.Fprintln(out, "dreamer:     off — no limits are set, which reads as zero")
+	}
 	keys := make([]string, 0, len(cfg.Caps))
 	for key := range cfg.Caps {
 		keys = append(keys, key)

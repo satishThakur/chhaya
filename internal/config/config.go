@@ -32,6 +32,11 @@ type file struct {
 	Approvals struct {
 		TimeoutSeconds *int `yaml:"timeout_seconds"`
 	} `yaml:"approvals"`
+	// Optional. Absent means the dreamer may do nothing; present means both numbers are required.
+	Dreamer *struct {
+		ProposalsPerDay *int `yaml:"proposals_per_day"`
+		CallsPerHour    *int `yaml:"calls_per_hour"`
+	} `yaml:"dreamer"`
 }
 
 // Load reads and validates the policy file. It returns the config, the hex
@@ -79,7 +84,18 @@ func Load(path string) (policy.Config, string, error) {
 			"caps.food.per_day_inr (%d) is below per_order_inr (%d), which cannot be what you meant", perDay, perOrder)
 	}
 
+	var dl policy.DreamerLimits
+	if f.Dreamer != nil {
+		if dl.ProposalsPerDay, err = required(f.Dreamer.ProposalsPerDay, "dreamer.proposals_per_day"); err != nil {
+			return policy.Config{}, hash, err
+		}
+		if dl.CallsPerHour, err = required(f.Dreamer.CallsPerHour, "dreamer.calls_per_hour"); err != nil {
+			return policy.Config{}, hash, err
+		}
+	}
+
 	return policy.Config{
+		Dreamer: dl,
 		Caps: map[string]policy.Cap{
 			"food": {PerOrderMinor: perOrder * 100, PerDayMinor: perDay * 100},
 		},

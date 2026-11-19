@@ -11,10 +11,25 @@ import (
 func Decide(req Request, st State, cfg Config, now time.Time) Decision {
 	d := Decision{Tier: req.Tier, Kind: req.Kind}
 
+	// 0. Unknown actor. Before everything: a caller this package does not know gets nothing,
+	//    including a refusal that names a tool.
+	if req.Actor != ActorHermes && req.Actor != ActorDreamer && req.Actor != ActorApprover {
+		return deny(d, "actor.unknown", fmt.Sprintf("blocked: %q is not an actor this gateway knows", req.Actor))
+	}
+
 	// 1. Unknown tool. First, so that nothing below can be reached by a name
 	//    the registry never approved.
 	if !req.Known {
 		return deny(d, "tool.unknown", fmt.Sprintf("blocked: %q is not a registered tool", req.Tool))
+	}
+
+	// 1a. A tool this actor may not call. The dreamer has a short list in code; Hermes is limited
+	//     by the registry and the tiers below.
+	if req.Actor == ActorDreamer && !dreamerTools[req.Tool] {
+		return deny(d, "actor.tool_not_allowed", fmt.Sprintf("blocked: the dreamer may not call %q", req.Tool))
+	}
+	if req.Actor == ActorApprover && !approverTools[req.Tool] {
+		return deny(d, "actor.tool_not_allowed", fmt.Sprintf("blocked: the approver may not call %q", req.Tool))
 	}
 
 	// 1b. Arguments that did not parse. Before anything else that would have
@@ -42,7 +57,9 @@ func Decide(req Request, st State, cfg Config, now time.Time) Decision {
 	}
 
 	// 4. Taint escalates any write to approval, whatever its tier.
-	if st.Tainted && req.Kind == Write {
+	//    Taint is the browsing session's state and belongs to Hermes; the dreamer has no tool that
+	//    brings in untrusted content, and its only write already waits for the owner's tap.
+	if st.Tainted && req.Kind == Write && req.Actor == ActorHermes {
 		d.Outcome = NeedApproval
 		d.RuleID = "taint.write"
 		d.Reason = fmt.Sprintf("approval required: untrusted content from %s entered the session at %s; /clear on the approver bot to reset",
@@ -76,6 +93,12 @@ func Decide(req Request, st State, cfg Config, now time.Time) Decision {
 }
 
 func withCaps(d Decision, req Request, st State, cfg Config) Decision {
+	if req.Actor == ActorDreamer && req.Tool == "memory.propose_update" && st.Spent[CapDreamerProposals] >= int64(cfg.Dreamer.ProposalsPerDay) {
+		return deny(d, "dreamer.cap.proposals",
+			fmt.Sprintf("blocked: the dreamer has made %d proposal(s) today, the limit is %d (a missing limit reads as zero)",
+				st.Spent[CapDreamerProposals], cfg.Dreamer.ProposalsPerDay))
+	}
+
 	if req.CapKey != "" {
 		limit, ok := cfg.Caps[req.CapKey]
 		if !ok {
@@ -96,14 +119,18 @@ func withCaps(d Decision, req Request, st State, cfg Config) Decision {
 		}
 	}
 
-	if cfg.DefaultRatePerHour <= 0 {
+	limit := cfg.DefaultRatePerHour
+	if req.Actor == ActorDreamer {
+		limit = cfg.Dreamer.CallsPerHour
+	}
+	if limit <= 0 {
 		return deny(d, "ratelimit.unset",
 			"blocked: no rate limit is configured, which reads as zero calls per hour")
 	}
-	if st.Calls[req.Tool] >= cfg.DefaultRatePerHour {
+	if n := st.Calls[CallKey(req.Actor, req.Tool)]; n >= limit {
 		return deny(d, "ratelimit.tool",
 			fmt.Sprintf("blocked: %s has been called %d times this hour, the limit is %d",
-				req.Tool, st.Calls[req.Tool], cfg.DefaultRatePerHour))
+				req.Tool, n, limit))
 	}
 
 	return d

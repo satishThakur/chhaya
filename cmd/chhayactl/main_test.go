@@ -116,6 +116,7 @@ func TestRunExplainPrintsConfiguration(t *testing.T) {
 		"rate limit:",
 		"approvals:",
 		"branches:",
+		"dreamer:     memory.list, memory.get, memory.propose_update only; 5 proposals a day",
 		"cap food:",
 		"per order",
 		"per day",

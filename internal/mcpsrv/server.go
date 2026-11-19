@@ -66,6 +66,33 @@ func TLSConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
 	}, nil
 }
 
+// actorHeader carries the caller's identity from the TLS layer to the tool handler, through the
+// one place the MCP SDK gives a handler per-request data: the request's headers. ActorHandler
+// always overwrites it, so a value the client sent never survives.
+const actorHeader = "X-Chhaya-Actor"
+
+// ActorHandler names the caller from the verified client certificate: the leaf's common name.
+// A request with no verified certificate is refused with 401 and never reaches the MCP layer, and
+// any actor header the client supplied is discarded. Which actors exist, and what each may do, is
+// decided in internal/policy; this only says who is asking. Certificates are issued by our own CA
+// (deploy/gen-certs.sh), so a common name is something we wrote, not something a caller chose.
+func ActorHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Del(actorHeader)
+		if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.VerifiedChains[0]) == 0 {
+			http.Error(w, "a verified client certificate is required", http.StatusUnauthorized)
+			return
+		}
+		cn := r.TLS.VerifiedChains[0][0].Subject.CommonName
+		if cn == "" {
+			http.Error(w, "the client certificate names no actor", http.StatusUnauthorized)
+			return
+		}
+		r.Header.Set(actorHeader, cn)
+		next.ServeHTTP(w, r)
+	})
+}
+
 // MCPHandler exposes the registry over MCP. Every tool is registered with the
 // same handler shape: unmarshal, call Invoke, marshal. No tool gets its own
 // path to its handler, so the choke point survives contact with the SDK.
@@ -92,7 +119,13 @@ func (g *Gateway) MCPHandler(name, version string) http.Handler {
 				}
 			}
 
-			res := g.Invoke(ctx, ToolCall{Actor: "hermes", Name: req.Params.Name, Args: args, ArgsError: argsErr})
+			// The actor is whoever's certificate this request arrived on (ActorHandler). A missing or
+			// empty one is an unknown actor, which policy.Decide denies.
+			actor := ""
+			if x := req.GetExtra(); x != nil {
+				actor = x.Header.Get(actorHeader)
+			}
+			res := g.Invoke(ctx, ToolCall{Actor: actor, Name: req.Params.Name, Args: args, ArgsError: argsErr})
 			if res.IsError {
 				return errorResult(res.Error), nil
 			}
@@ -105,7 +138,7 @@ func (g *Gateway) MCPHandler(name, version string) http.Handler {
 		})
 	}
 
-	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
+	return ActorHandler(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil))
 }
 
 // errorResult returns a tool error rather than a protocol error, so the model

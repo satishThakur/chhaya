@@ -17,3 +17,10 @@ allowlists:
 
 approvals:
   timeout_seconds: 300
+
+# The dreamer: the nightly memory agent (docs/dreaming.md). It can read memory and propose lines
+# that wait for your tap, and nothing else; the list of tools is in internal/policy. Leave this
+# section out and the dreamer can do nothing at all.
+dreamer:
+  proposals_per_day: 5
+  calls_per_hour: 600

@@ -154,3 +154,11 @@ it searches without being asked, which matters for replies to the digest.
 **What we found.** (1) `git status` after `git add -A` showed the files absent, and nobody read it. `git check-ignore -v <file>` names the rule. (2) A green local test says nothing about what was committed.
 
 **Changes.** The ignore is now `/memory/` (repo root only). `restart` builds first and leaves the running stack alone if the build fails. Before merging a change that adds files, run `git status --short` after `git add -A` and look for the new files in it.
+
+## 2026-11-19: a new "unknown actor" rule would have refused every approval tap
+
+Adding `actor.unknown` to `policy.Decide` made the unit tests of `internal/policy` pass, and broke ten tests in
+`internal/approval`: the approver bot calls `policy.Decide` itself, for its own `memory.apply`, and sent no actor, so
+the new rule refused every tap to write a memory line. Only the full `make test` caught it; the policy tests alone
+were green. Lesson: when a rule is added to the single choke point, grep for every caller of the function, not just
+the one the change is about (`grep -rn "policy.Request{"`), and run the whole suite before believing a package's own.

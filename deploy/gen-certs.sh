@@ -4,9 +4,11 @@
 #
 #   deploy/gen-certs.sh deploy/certs
 #
-# The CA is ours and signs exactly two certificates. Hermes presents its
-# client cert or it does not reach the gateway at all.
+# The CA is ours and signs the gateway's certificate and one client certificate per actor
+# (hermes, dreamer). A client presents its certificate or does not reach the gateway at all.
 set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 die() { echo "error: $1" >&2; exit 1; }
 
@@ -46,6 +48,10 @@ openssl x509 -req -in hermes.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
 
 rm -f ./*.csr
 chmod 600 ./*.key
+
+# The dreamer (the nightly memory agent) is a second client with its own identity; see
+# docs/dreaming.md. It runs on the host, not in a container, and nothing mounts its key.
+"$HERE/issue-client-cert.sh" dreamer "$PWD"
 
 # No ACLs, no chgrp. Both containers run as the operator's uid: the gateway through
 # `user:` in docker-compose.yml, Hermes through HERMES_UID, which the image's s6 stage
