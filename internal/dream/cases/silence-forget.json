@@ -1,0 +1,31 @@
+{
+ "id": "silence-forget",
+ "note": "An explicit 'don't remember' is a ban.",
+ "cap": 5,
+ "memory": {
+  "interests": [
+   "Studies astronomy. <!-- proposal 20261103-0abc000000004aaa, approved 2026-11-03 -->",
+   "Enjoys the band Lumen Drift. <!-- proposal 20261103-0abc000000004aab, approved 2026-11-03 -->"
+  ]
+ },
+ "trace": {
+  "id": "synthetic",
+  "source": "telegram",
+  "messages": [
+   {
+    "id": 1,
+    "role": "user",
+    "content": "I started seeing a therapist on Tuesdays. Please don't remember that, keep it out of memory."
+   },
+   {
+    "id": 2,
+    "role": "assistant",
+    "content": "Understood, I won't save it."
+   }
+  ]
+ },
+ "expect": {
+  "propose": [],
+  "count": 0
+ }
+}

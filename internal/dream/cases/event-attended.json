@@ -1,0 +1,46 @@
+{
+ "id": "event-attended",
+ "note": "A live event is a fact even when the owner only asked for planning help.",
+ "cap": 5,
+ "memory": {
+  "interests": [
+   "Studies astronomy. <!-- proposal 20261103-0abc000000004aaa, approved 2026-11-03 -->",
+   "Enjoys the band Lumen Drift. <!-- proposal 20261103-0abc000000004aab, approved 2026-11-03 -->"
+  ]
+ },
+ "trace": {
+  "id": "synthetic",
+  "source": "telegram",
+  "messages": [
+   {
+    "id": 1,
+    "role": "user",
+    "content": "Tonight I'm going to see Lumen Drift live at the Harbor Hall in Pune."
+   },
+   {
+    "id": 2,
+    "role": "assistant",
+    "content": "Enjoy! Want a cab booked?"
+   },
+   {
+    "id": 3,
+    "role": "user",
+    "content": "No thanks."
+   }
+  ]
+ },
+ "expect": {
+  "propose": [
+   {
+    "path": "interests",
+    "all": [
+     "lumen drift",
+     "pune"
+    ],
+    "source": [
+     1
+    ]
+   }
+  ]
+ }
+}

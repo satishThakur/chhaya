@@ -1,0 +1,46 @@
+{
+ "id": "specifics-over-broad",
+ "note": "Broad stored line does not cover named specifics; 'not now' defers the chat save, it is not a ban. One current interest with several names is one line.",
+ "cap": 5,
+ "memory": {
+  "interests": [
+   "Studies astronomy. <!-- proposal 20261103-0abc000000004aaa, approved 2026-11-03 -->",
+   "Enjoys the band Lumen Drift. <!-- proposal 20261103-0abc000000004aab, approved 2026-11-03 -->"
+  ]
+ },
+ "trace": {
+  "id": "synthetic",
+  "source": "telegram",
+  "messages": [
+   {
+    "id": 1,
+    "role": "user",
+    "content": "I'm reading up on Kepler and Tycho Brahe these days, astronomy history really grabs me."
+   },
+   {
+    "id": 2,
+    "role": "assistant",
+    "content": "Want me to save that to memory?"
+   },
+   {
+    "id": 3,
+    "role": "user",
+    "content": "Not now, leave memory out for today."
+   }
+  ]
+ },
+ "expect": {
+  "propose": [
+   {
+    "path": "interests",
+    "all": [
+     "kepler",
+     "brahe"
+    ],
+    "source": [
+     1
+    ]
+   }
+  ]
+ }
+}
