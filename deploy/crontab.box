@@ -49,3 +49,12 @@ CHHAYA_BACKUP_S3=s3://chhaya-backup-803874683069-ap-south-1/backups
 # it lasts about 6 hours: that is why this is the morning, not 02:30. A night with no message at all
 # means this job broke. A canary result older than 26 hours shows as FAILED. docs/decisions.md 2026-11-18.
 0 2 * * * cd /home/ubuntu/chhaya && go build -o bin/chhayactl ./cmd/chhayactl && bin/chhayactl report nightly -s3 s3://chhaya-backup-803874683069-ap-south-1/evals -memory /home/ubuntu/.chhaya/gateway/memory -run-json /home/ubuntu/.chhaya/backups/memrun.json -env deploy/.env.gateway -send >> /home/ubuntu/.chhaya/backups/report.log 2>&1
+
+# The dreamer, 02:40 IST = 21:10 UTC, after the export (20:45), the checks and the canary (21:00,
+# done by ~21:03). Reads the IST day that just ended and the new one from the bucket, and for each
+# owner conversation it has not read before (the ledger, ~/.chhaya/dream-ledger.json) asks the memory
+# agent for facts memory does not hold. -propose sends each as an approver card; nothing is written
+# until you tap, and a tap makes the gateway commit it. -send puts one Telegram summary (counts only)
+# plus a presigned link to the HTML review page, as every job does. At most 5 proposals a night
+# (config/policy.yaml). docs/decisions.md 2026-11-21; docs/runbook.md "Running the dreamer by hand".
+10 21 * * * cd /home/ubuntu/chhaya && go build -o bin/chhayactl ./cmd/chhayactl && for d in $(TZ=Asia/Kolkata date -d yesterday +\%F) $(TZ=Asia/Kolkata date +\%F); do echo "== $d"; bin/chhayactl dream run -s3 s3://chhaya-backup-803874683069-ap-south-1/evals -day $d -propose -publish -send -env deploy/.env.gateway; done >> /home/ubuntu/.chhaya/backups/dream.log 2>&1

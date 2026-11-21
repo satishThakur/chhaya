@@ -889,3 +889,10 @@ second user or inbound access, or the bot naming convention stops being enforcea
 **Consequences.** Not yet reporting this way: `backup`, `trace export` and the cost reports (the cost report is itself Telegram messages). The morning report could list whether the backup and export ran; in `docs/backlog.md`. New jobs use `jobreport.Deliver` from the start.
 
 **Reopen if:** the 6-hour link (role credentials) is a nuisance, or the summaries become noise.
+
+## 2026-11-21: the dreamer runs nightly from cron
+
+**Decided:** `chhayactl dream run -propose -publish -send` runs at 02:40 IST for the IST day that ended and the new one. Each proposal is an approver card; a tap commits it. The ledger stops a conversation being read twice. The cap is 5 proposals a night.
+**Why now:** the first real test (the owner's deliberate facts of 2026-11-20) found three misses. Each was fixed in the prompt and kept as an eval: (1) a broad stored line ("studies X") was treated as covering named specifics; (2) a live event the owner attended or was going to was skipped; (3) "leave memory out for now" said to the assistant in chat was read as a ban. Now a deferral ("not now", "later") still counts, because the owner's tap approves, while an explicit forget ("don't remember that") proposes nothing (case `silence-forget`). One current interest named through several examples is one line; completed items (heard, read) stay separate.
+**Known limits:** the same event in two conversations of one run gives two cards (the second is not in memory until the first is tapped); the owner taps one and rejects the other. Private real cases (`MEMORY/.tests/dream/real-*`) hold the owner's actual wording; the repo's cases use made-up names only, because this repo is public.
+**Would reopen if:** the approval rate falls under about half, or a night's cards are mostly noise.
