@@ -56,3 +56,7 @@ Design in `docs/dreaming.md` (memory as a module: branch, gates, canary; reshape
 ## The morning report and the job records
 
 The 07:30 IST report names each unattended job (backup, trace export, dreamer) and says `FAILED` when one left no record, left one older than 26 hours, or finished broken. The records are `~/.chhaya/backups/last-success.json` (backup), `trace-export.json` and `dream.json`. If a job shows FAILED, read its log in the same directory (`backup.log`, `export.log`, `dream.log`). A manual `dream run` without `-propose` leaves no record on purpose.
+
+## The health module
+
+Design, enabling it, the first live check and backup/restore are in `docs/health.md`. In short: `scripts/dev.sh health-init`, fill the Garmin login in `deploy/.env.health`, then `scripts/dev.sh restart`. Before trusting any number, run `scripts/dev.sh compose run --rm garmin-sync python -m garmin_sync.main --dry-run` and compare its counts with the Garmin app. The 07:30 IST morning report carries a "health sync" row once the module is on.

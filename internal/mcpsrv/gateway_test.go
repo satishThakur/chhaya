@@ -780,8 +780,9 @@ func TestNoPathToAHandlerAnywhereInTheModule(t *testing.T) {
 	// path (relative to the module root) → the only function in it that may
 	// call a handler. An empty function name means the whole file may.
 	allowed := map[string]string{
-		"internal/mcpsrv/gateway.go":   "dispatch",
-		"internal/tools/tools_test.go": "", // unit-tests the handlers themselves
+		"internal/mcpsrv/gateway.go":    "dispatch",
+		"internal/tools/tools_test.go":  "", // unit-tests the handlers themselves
+		"internal/tools/health_test.go": "", // same, for the health tools
 	}
 
 	var parsed int

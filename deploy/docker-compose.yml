@@ -18,6 +18,13 @@ services:
       CHHAYA_TLS_CERT: /etc/chhaya/certs/gateway.crt
       CHHAYA_TLS_KEY: /etc/chhaya/certs/gateway.key
       CHHAYA_TLS_CA: /etc/chhaya/certs/ca.crt
+      # The health module (docs/health.md). All three are empty unless deploy/.env.health exists
+      # (scripts/dev.sh exports them); empty means the module is off and its tools do not exist.
+      # The ingest port is NOT published: only containers on this compose network can reach it,
+      # and they need the secret.
+      CHHAYA_HEALTH_DB_URL: ${CHHAYA_HEALTH_DB_URL:-}
+      CHHAYA_HEALTH_INGEST_SECRET: ${CHHAYA_HEALTH_INGEST_SECRET:-}
+      CHHAYA_HEALTH_TZ: ${CHHAYA_HEALTH_TZ:-Asia/Kolkata}
     volumes:
       # The audit log, kill-switch state and policy marker: a bind mount of a host
       # directory (default ~/.chhaya/gateway, 0700), so it outlives Docker. The host
@@ -29,6 +36,53 @@ services:
       - ./certs:/etc/chhaya/certs:ro
     ports:
       - "127.0.0.1:8443:8443"     # localhost only; nothing about this is internet-facing
+    restart: unless-stopped
+
+  # --- the health module's two helpers; only started with COMPOSE_PROFILES=health ---------
+  # (scripts/dev.sh sets it when deploy/.env.health exists). The module itself runs inside the
+  # gateway; these are its database and the Garmin sync that fills it.
+  timescaledb:
+    profiles: ["health"]
+    image: timescale/timescaledb:2.17.2-pg16
+    environment:
+      POSTGRES_USER: chhaya
+      POSTGRES_DB: chhaya_health
+      POSTGRES_PASSWORD: ${HEALTH_DB_PASSWORD:-}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      # A named volume, not a bind mount like the rest: the image will not run under an arbitrary
+      # host uid (initdb needs a passwd entry), and chowning a host directory to the image's uid
+      # needs root. The durable copy is the nightly pg_dump inside the backup tarball
+      # (docs/health.md), so `docker volume prune` on a stopped stack loses nothing that matters.
+      - health-pgdata:/var/lib/postgresql/data
+    # No published port: the gateway reaches it as timescaledb:5432 on the compose network.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chhaya -d chhaya_health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  garmin-sync:
+    profiles: ["health"]
+    build:
+      context: ../sync/garmin
+    # The operator's uid, so the saved Garmin tokens in the bind mount are the operator's files.
+    user: "${HERMES_UID:?run through scripts/dev.sh (make dev-up)}:${HERMES_GID:?run through scripts/dev.sh (make dev-up)}"
+    # An explicit list, not env_file: this container gets the Garmin login and the ingest secret
+    # and nothing else, and the gateway gets the ingest secret and not the Garmin login.
+    environment:
+      GARMIN_EMAIL: ${GARMIN_EMAIL:-}
+      GARMIN_PASSWORD: ${GARMIN_PASSWORD:-}
+      CHHAYA_HEALTH_INGEST_SECRET: ${CHHAYA_HEALTH_INGEST_SECRET:-}
+      CHHAYA_HEALTH_INGEST_URL: http://gateway:8444
+      CHHAYA_HEALTH_TZ: ${CHHAYA_HEALTH_TZ:-Asia/Kolkata}
+      SYNC_EVERY_MINUTES: ${SYNC_EVERY_MINUTES:-180}
+      GARMIN_TOKENDIR: /tokens
+    volumes:
+      - ${CHHAYA_HEALTH_HOME:-/nonexistent}/garmin:/tokens
+    depends_on:
+      - gateway
     restart: unless-stopped
 
   hermes:
@@ -102,3 +156,5 @@ services:
       - gateway
     restart: unless-stopped
 
+volumes:
+  health-pgdata:

@@ -1,4 +1,4 @@
-.PHONY: test build evals e2e help \
+.PHONY: test build evals e2e test-pg help \
         dev-doctor dev-certs dev-up dev-down dev-restart dev-status \
         dev-logs dev-audit dev-verify dev-stop dev-resume dev-backup
 
@@ -47,6 +47,11 @@ test:
 build:
 	go build -o bin/chhayad ./cmd/chhayad
 	go build -o bin/chhayactl ./cmd/chhayactl
+
+# The health store tests need a real TimescaleDB (a hypertable and a continuous aggregate cannot be
+# faked). scripts/test-pg.sh starts a throwaway one, runs them and stops it. `make test` skips them.
+test-pg:
+	@scripts/test-pg.sh
 
 evals:
 	go test ./internal/policy/... -v

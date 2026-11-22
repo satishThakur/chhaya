@@ -41,9 +41,10 @@ internal/
   audit/            hash-chained append-only log, and its verifier
   approval/         chhaya-approver Telegram bot (and /stop)
   mcpsrv/           MCP over HTTPS+mTLS; the only path to a tool handler
-  tools/            memory, swiggy, claude_worker, garmin
+  tools/            memory, swiggy, claude_worker, health (read tools)
+  health/           Garmin data: strict ingest, TimescaleDB store, summaries (docs/health.md)
   config/           policy.yaml load and validate
-sync/garmin/        scheduled pull into SQLite
+sync/garmin/        the Garmin sync sidecar (Python, its own container): fetch, then POST to the gateway's ingest
 memory.example/     generic seed for Personal memory — not anyone's data
                     (the real memory is ~/.chhaya/gateway/memory, a local git repo; propose_update only)
 hermes/             config.yaml template, SOUL.md, skills we author
