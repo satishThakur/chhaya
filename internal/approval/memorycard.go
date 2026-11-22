@@ -24,6 +24,10 @@ func (b *Bot) ProposeMemory(ctx context.Context, p memory.Proposal) error {
 	// first, then escape, so a cut never lands inside an entity.
 	text := fmt.Sprintf("<b>approve memory?</b>\n<code>%s</code>: %s\nwhy: %s",
 		html.EscapeString(p.Path), html.EscapeString(p.Entry), html.EscapeString(truncate(p.Rationale, 300)))
+	if p.Remove != "" {
+		text = fmt.Sprintf("<b>approve REMOVING this line?</b>\n<code>%s</code>: <s>%s</s>\nwhy: %s",
+			html.EscapeString(p.Path), html.EscapeString(p.Line), html.EscapeString(truncate(p.Rationale, 300)))
+	}
 	msgID, err := b.tg.SendMessage(ctx, b.chatID, text, nil)
 	if err != nil {
 		return fmt.Errorf("could not send the memory card: %w", err)
@@ -130,17 +134,21 @@ func (b *Bot) memoryTap(ctx context.Context, c *Callback, approve bool) {
 			// memory.ErrAlreadyWritten lands here too: its text is the card's
 			// "already written; approve to finish filing it", and the buttons
 			// stay so approve can do exactly that.
-			b.memoryRecord(id, carded.Path, "deny", "memory.tap_rejected", "rejected by the approver",
+			b.memoryRecord(carded, "deny", "memory.tap_rejected", "rejected by the approver",
 				"denied_by_user", audit.Result{Status: "error", Error: err.Error()})
 			b.tg.AnswerCallback(ctx, c.ID, "not rejected")
 			b.memoryFailed(ctx, msgID, err.Error())
 			return
 		}
-		b.memoryRecord(id, p.Path, "deny", "memory.tap_rejected", "rejected by the approver",
+		b.memoryRecord(p, "deny", "memory.tap_rejected", "rejected by the approver",
 			"denied_by_user", audit.Result{Status: "refused"})
 		b.tg.AnswerCallback(ctx, c.ID, "rejected")
+		shown := p.Entry
+		if p.Remove != "" {
+			shown = p.Line
+		}
 		b.tg.EditMessage(ctx, b.chatID, msgID, fmt.Sprintf("❌ rejected: <code>%s</code>: %s",
-			html.EscapeString(p.Path), html.EscapeString(p.Entry)), nil)
+			html.EscapeString(p.Path), html.EscapeString(shown)), nil)
 		return
 	}
 
@@ -153,7 +161,7 @@ func (b *Bot) memoryTap(ctx context.Context, c *Callback, approve bool) {
 	}, b.state.Snapshot(now), b.cfg, now)
 	if d.Outcome == policy.Deny {
 		release()
-		b.memoryRecord(id, carded.Path, "deny", d.RuleID, d.Reason,
+		b.memoryRecord(carded, "deny", d.RuleID, d.Reason,
 			"approved", audit.Result{Status: "refused"})
 		// The card keeps its buttons: once the reason is lifted, the same
 		// card is tapped again.
@@ -164,13 +172,13 @@ func (b *Bot) memoryTap(ctx context.Context, c *Callback, approve bool) {
 	// What the human approved is the card, not the file. A proposal changed
 	// on disk since the card went out is refused rather than applied, so the
 	// approval cannot be carried over to words nobody was shown.
-	if cur, err := b.mem.Load(id); err != nil || cur.Path != carded.Path || cur.Entry != carded.Entry {
+	if cur, err := b.mem.Load(id); err != nil || cur.Path != carded.Path || cur.Entry != carded.Entry || cur.Remove != carded.Remove || cur.Line != carded.Line {
 		reason := "the proposal changed after this card was shown"
 		if err != nil {
 			reason = err.Error()
 		}
 		release()
-		b.memoryRecord(id, carded.Path, "deny", "memory.proposal_changed", reason,
+		b.memoryRecord(carded, "deny", "memory.proposal_changed", reason,
 			"approved", audit.Result{Status: "error", Error: reason})
 		b.tg.AnswerCallback(ctx, c.ID, "not written")
 		b.memoryFailed(ctx, msgID, reason)
@@ -180,7 +188,7 @@ func (b *Bot) memoryTap(ctx context.Context, c *Callback, approve bool) {
 	// Fail closed: a call the rate limit cannot count is not made.
 	if err := b.state.RecordCall(memoryTool, now); err != nil {
 		release()
-		b.memoryRecord(id, carded.Path, "deny", "state.unwritable", "the gateway cannot record this call",
+		b.memoryRecord(carded, "deny", "state.unwritable", "the gateway cannot record this call",
 			"approved", audit.Result{Status: "error", Error: err.Error()})
 		b.tg.AnswerCallback(ctx, c.ID, "not written")
 		b.memoryFailed(ctx, msgID, "the gateway cannot record this call")
@@ -192,7 +200,7 @@ func (b *Bot) memoryTap(ctx context.Context, c *Callback, approve bool) {
 	// line the ledger has no record of. A crash after this record and
 	// before the result leaves an intent with no outcome, which reads as
 	// "look at the document", not as silence.
-	if err := b.memoryRecord(id, carded.Path, "allow", "memory.tap_approved", "approved by the approver",
+	if err := b.memoryRecord(carded, "allow", "memory.tap_approved", "approved by the approver",
 		"approved", audit.Result{Status: "pending"}); err != nil {
 		release()
 		fmt.Fprintf(os.Stderr, "CRITICAL: approver did not write proposal %s: its intent record failed: %v\n", id, err)
@@ -204,15 +212,20 @@ func (b *Bot) memoryTap(ctx context.Context, c *Callback, approve bool) {
 	p, err := b.mem.ApplyApproved(id, now)
 	if err != nil {
 		release()
-		b.memoryRecord(id, carded.Path, "allow", "memory.tap_approved", "approved by the approver",
+		b.memoryRecord(carded, "allow", "memory.tap_approved", "approved by the approver",
 			"approved", audit.Result{Status: "error", Error: err.Error()})
 		b.tg.AnswerCallback(ctx, c.ID, "not written")
 		b.memoryFailed(ctx, msgID, err.Error())
 		return
 	}
-	b.memoryRecord(id, p.Path, "allow", "memory.tap_approved", "approved by the approver",
+	b.memoryRecord(p, "allow", "memory.tap_approved", "approved by the approver",
 		"approved", audit.Result{Status: "ok"})
 	b.tg.AnswerCallback(ctx, c.ID, "written")
+	if p.Remove != "" {
+		b.tg.EditMessage(ctx, b.chatID, msgID, fmt.Sprintf("🗑 removed from <code>%s</code>: %s",
+			html.EscapeString(p.Path), html.EscapeString(p.Line)), nil)
+		return
+	}
 	b.tg.EditMessage(ctx, b.chatID, msgID, fmt.Sprintf("✅ written to <code>%s</code>: %s",
 		html.EscapeString(p.Path), html.EscapeString(p.Entry)), nil)
 }
@@ -229,10 +242,14 @@ func (b *Bot) memoryFailed(ctx context.Context, msgID int64, reason string) {
 // memoryRecord writes a tap's audit record. The args never carry the entry:
 // the ledger says which proposal and which document, and the proposal file
 // in applied/ or rejected/ holds the words.
-func (b *Bot) memoryRecord(id, path, decision, rule, reason, answer string, res audit.Result) error {
+func (b *Bot) memoryRecord(p memory.Proposal, decision, rule, reason, answer string, res audit.Result) error {
+	args := map[string]any{"proposal_id": p.ID, "path": p.Path}
+	if p.Remove != "" {
+		args["removes"] = p.Remove
+	}
 	return b.appendRecord(audit.Record{
 		Actor: "approver", Tool: memoryTool, Kind: policy.Write.String(), Tier: int(policy.TierInternal),
-		Args:     audit.MarshalArgs(map[string]any{"proposal_id": id, "path": path}),
+		Args:     audit.MarshalArgs(args),
 		Decision: decision, Rule: rule, Reason: reason,
 		Approval: &audit.Approval{Answer: answer},
 		Result:   res,

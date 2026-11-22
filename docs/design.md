@@ -142,7 +142,7 @@ The model of me is the asset, so it lives in Personal memory, our durable long-t
 **Two layers**
 
 - **Hermes built-in** (`MEMORY.md`, `USER.md`): capped at 2,200 and 1,375 characters by design. Use it for the handful of facts every session needs. Turn on `memory.write_approval: true` so nothing lands without my yes.
-- **Personal memory**: a folder of Markdown files, exposed through the gateway as tools (`memory.list`, `memory.get`, `memory.propose_update`). Unbounded. It is data, not code: it lives on the host outside the code repo (`~/.chhaya/gateway/memory` in dev, an EBS volume in production), as its own local git repository with no remote, so every approved line is diffable and revertable. The code repo is public and must never hold it; `memory.example/` is a generic seed. Off-box safety is the backup job's concern. `memory.list` was built because the agent could not discover documents (see `decisions.md`, 2026-11-08); `memory.search` and an SQLite index are still future work, needed only when a listing stops being enough.
+- **Personal memory**: a folder of Markdown files, exposed through the gateway as tools (`memory.list`, `memory.get`, `memory.propose_update`, `memory.propose_remove`). Unbounded. It is data, not code: it lives on the host outside the code repo (`~/.chhaya/gateway/memory` in dev, an EBS volume in production), as its own local git repository with no remote, so every approved line is diffable and revertable. The code repo is public and must never hold it; `memory.example/` is a generic seed. Off-box safety is the backup job's concern. `memory.list` was built because the agent could not discover documents (see `decisions.md`, 2026-11-08); `memory.search` and an SQLite index are still future work, needed only when a listing stops being enough.
 
 **Memory types in the design.** Personal memory is the durable long-term memory; everything else is a cache, a playbook or raw history.
 
@@ -291,7 +291,7 @@ chhaya/
 - Secrets come from env only. Never log them; the audit logger redacts by default.
 - Go 1.24+, standard `go test`, small focused packages. Everything we write is Go; Hermes is the only Python in the
   system and it is an opaque dependency we run as a container. Run `make test` and `make evals` before saying done.
-- Never edit Personal memory (`$CHHAYA_GATEWAY_HOME/memory`) except through `memory.propose_update` flows. The repo is public: never commit personal data.
+- Never edit Personal memory (`$CHHAYA_GATEWAY_HOME/memory`) except through `memory.propose_update` and `memory.propose_remove` flows. The repo is public: never commit personal data.
 
 **Working loop:** describe one milestone at a time to Claude Code, ask it to plan first, review the plan, then let it build with tests. Keep a short `docs/decisions.md` it appends to whenever we make a choice, so later sessions don't re-litigate.
 
