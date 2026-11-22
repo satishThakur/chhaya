@@ -50,11 +50,12 @@ services:
       POSTGRES_PASSWORD: ${HEALTH_DB_PASSWORD:-}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      # A named volume, not a bind mount like the rest: the image will not run under an arbitrary
-      # host uid (initdb needs a passwd entry), and chowning a host directory to the image's uid
-      # needs root. The durable copy is the nightly pg_dump inside the backup tarball
-      # (docs/health.md), so `docker volume prune` on a stopped stack loses nothing that matters.
-      - health-pgdata:/var/lib/postgresql/data
+      # A bind mount onto the host, so the data lives on the EC2 disk and survives the container,
+      # `docker compose down -v` and image upgrades. The image starts as root, makes PGDATA under
+      # this mount and hands it to its own postgres user, so the host side only has to exist
+      # (scripts/dev.sh creates it). The files inside are owned by that uid, not by you; read them
+      # through the database (the nightly pg_dump in the backup does), not with tar.
+      - ${CHHAYA_HEALTH_HOME:-/nonexistent}/pgdata:/var/lib/postgresql/data
     # No published port: the gateway reaches it as timescaledb:5432 on the compose network.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U chhaya -d chhaya_health"]
@@ -156,5 +157,3 @@ services:
       - gateway
     restart: unless-stopped
 
-volumes:
-  health-pgdata:

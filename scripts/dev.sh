@@ -148,7 +148,7 @@ load_health_env() {
 
 prepare_health() {
   health_enabled || return 0
-  mkdir -p "$HEALTH_HOME_DIR/garmin"
+  mkdir -p "$HEALTH_HOME_DIR/garmin" "$HEALTH_HOME_DIR/pgdata"
   chmod 700 "$HEALTH_HOME_DIR" "$HEALTH_HOME_DIR/garmin"
   [ -O "$HEALTH_HOME_DIR" ] || die "$HEALTH_HOME_DIR is not owned by you"
   local k

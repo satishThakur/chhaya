@@ -37,6 +37,11 @@ class RunOnce(unittest.TestCase):
         self.assertEqual(post.calls[0][1]["date"], "2026-11-21")
         self.assertEqual(run["metrics"], 6)  # (1 sleep + 1 stress + 1 steps) per day
 
+    def test_a_backfill_fetches_the_older_days_first_and_each_day_once(self):
+        run, post = self.run_it(back=3)
+        self.assertEqual(run["days"], ["2026-11-19", "2026-11-20", "2026-11-21", "2026-11-22"])
+        self.assertEqual([b["date"] for p, b in post.calls if p == "/ingest/day"], run["days"])
+
     def test_a_failed_login_is_reported_not_swallowed_and_never_logs_the_password(self):
         def bad(*a):
             raise RuntimeError("401 for me@example.com")

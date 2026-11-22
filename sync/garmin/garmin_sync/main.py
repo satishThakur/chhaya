@@ -47,11 +47,12 @@ def count(doc):
     return metrics, len(doc.get("activities", []))
 
 
-def run_once(cfg, now=None, garmin_login=garmin.login, fetch=garmin.fetch, post=ingest.post, dry_run=False):
+def run_once(cfg, now=None, garmin_login=garmin.login, fetch=garmin.fetch, post=ingest.post, dry_run=False, back=1):
     tz = ZoneInfo(cfg["tz"])
     now = now or datetime.now(timezone.utc)
     today = now.astimezone(tz).date()
-    days = [(today - timedelta(days=1)).isoformat(), today.isoformat()]
+    # Oldest first: today and `back` days before it. Re-posting a day replaces it, so any window is safe.
+    days = [(today - timedelta(days=n)).isoformat() for n in range(back, -1, -1)]
     started = now
     errors, metrics, acts, posted = [], 0, 0, 0
 
@@ -108,11 +109,14 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Garmin -> gateway health sync")
     ap.add_argument("--once", action="store_true", help="one pass, then exit (non-zero unless it fully succeeded)")
     ap.add_argument("--dry-run", action="store_true", help="fetch and show what would be posted; post nothing (implies --once)")
+    ap.add_argument("--days", type=int, default=1, metavar="N", help="also fetch the N days before today (default 1; use e.g. 30 once to backfill). Implies --once")
     args = ap.parse_args(argv)
+    if not 1 <= args.days <= 365:
+        ap.error("--days must be between 1 and 365")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     cfg = config_from_env()
-    if args.once or args.dry_run:
-        run = run_once(cfg, dry_run=args.dry_run)
+    if args.once or args.dry_run or args.days != 1:
+        run = run_once(cfg, dry_run=args.dry_run, back=args.days)
         return 0 if run["status"] == "ok" else 1
     while True:
         try:

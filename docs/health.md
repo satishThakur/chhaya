@@ -80,7 +80,7 @@ It signs in, fetches yesterday and today, and prints which sections it would pos
 
 Watching it: the 07:30 IST morning report has a "health sync" row (FAILED if the gateway has no record, the record is over 26 hours old, or the last pass was partial or failed). The audit log shows every ingest (`scripts/dev.sh audit`).
 
-**Backup.** The database is a Docker volume the backup tarball cannot see, so `scripts/dev.sh backup` first runs `pg_dump` into `~/.chhaya/gateway/health.dump`, which the tarball carries. A failed dump stops the backup before the stack is touched. `scripts/dev.sh health-dump` does it by hand. **Restore** into an empty database: `scripts/dev.sh health-restore [FILE]` (types RESTORE to confirm; follows TimescaleDB's pre/post-restore steps; tested on a real round trip).
+**Backup.** The database files sit on the host at `~/.chhaya/health/pgdata` (a bind mount, owned by the image's postgres uid, so the tarball does not take them), so `scripts/dev.sh backup` first runs `pg_dump` into `~/.chhaya/gateway/health.dump`, which the tarball carries. A failed dump stops the backup before the stack is touched. `scripts/dev.sh health-dump` does it by hand. **Restore** into an empty database: `scripts/dev.sh health-restore [FILE]` (types RESTORE to confirm; follows TimescaleDB's pre/post-restore steps; tested on a real round trip).
 
 Tests: `make test` runs everything that needs no database, including the Python-to-Go contract test (skipped only if there is no `python3`). `make test-pg` starts a throwaway TimescaleDB and runs the store tests, which cannot be faked. The Python unit tests: `cd sync/garmin && python3 -m unittest discover -s tests`.
 
@@ -91,3 +91,12 @@ Tests: `make test` runs everything that needs no database, including the Python-
 - A proactive daily nudge (needs a decision on what is worth a message).
 - HRV status ("balanced") and sleep stages over the night; both need a non-numeric or finer-grained store.
 - Reading health data back into the trace checks (a check that an answer's numbers appear in the tool output).
+
+## Sync: when it runs, idempotence, backfill
+
+The sync is a loop in the `garmin-sync` container: every `SYNC_EVERY_MINUTES` (default 180) it signs in (reusing the saved token), fetches **yesterday and today** from Garmin, posts each day, then posts a run record. It is not a delta from a stored cursor: the window is fixed and the gateway upserts by (day, metric), so re-posting a day replaces it and any run is safe to repeat. Yesterday is refetched because Garmin finishes sleep and body battery after midnight.
+
+- Run it now: `scripts/dev.sh compose run --rm garmin-sync python -m garmin_sync.main --once`
+- Look first, post nothing: add `--dry-run`.
+- Backfill history once: `... --once --days 30` (up to 365; older days first). Garmin rate-limits, so do big backfills in chunks.
+- There is no HTTP trigger: the ingest port only accepts data, and the sidecar holds the Garmin login, so "start a sync" is a command on the box, not an API.
