@@ -17,5 +17,5 @@
    {"id": 1, "role": "user", "content": "I own every Lumen Drift vinyl, the first pressing of Salt Lines is my favourite."}
   ]
  },
- "expect": {"propose": [{"path": "interests", "all": ["vinyl"], "source": [1]}]}
+ "expect": {"propose": [{"path": "interests", "all": ["vinyl"], "source": [1]}, {"path": "interests", "all": ["salt lines"], "source": [1]}]}
 }
