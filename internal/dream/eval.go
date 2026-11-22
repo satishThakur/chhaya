@@ -40,8 +40,13 @@ type Case struct {
 	Note   string              `json:"note,omitempty"`
 	Cap    int                 `json:"cap"`
 	Memory map[string][]string `json:"memory"`
-	Trace  *trace.Trace        `json:"trace"`
-	Expect Expect              `json:"expect"`
+	// Prior are proposals an earlier conversation of the same run already made (path and entry).
+	Prior []struct {
+		Path  string `json:"path"`
+		Entry string `json:"entry"`
+	} `json:"prior,omitempty"`
+	Trace  *trace.Trace `json:"trace"`
+	Expect Expect       `json:"expect"`
 }
 
 // ParseCase reads one case; an unknown field or a missing part is an error, so a typo cannot make
@@ -173,7 +178,11 @@ func RunCase(ctx context.Context, model memrun.Model, c Case) CaseResult {
 		r.Why = []string{err.Error()}
 		return r
 	}
-	ar, err := RunAgent(ctx, model, newMemGateway(c), c.Trace, c.Cap)
+	var prior []Candidate
+	for _, p := range c.Prior {
+		prior = append(prior, Candidate{Path: p.Path, Entry: p.Entry})
+	}
+	ar, err := RunAgent(ctx, model, newMemGateway(c), c.Trace, c.Cap, prior...)
 	r.Usage = ar.Usage
 	if err != nil {
 		r.Why = []string{"agent: " + err.Error()}

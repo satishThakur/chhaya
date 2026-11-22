@@ -1,0 +1,22 @@
+{
+ "id": "no-duplicate-pending",
+ "note": "The same event told in two conversations of one run, worded differently. The first was already proposed and waits for a tap; the second must not add a second card.",
+ "cap": 5,
+ "memory": {
+  "interests": [
+   "Enjoys the band Lumen Drift. <!-- proposal 20261103-0abc000000005aaa, approved 2026-11-03 -->"
+  ]
+ },
+ "prior": [
+  {"path": "interests", "entry": "Is attending a Lumen Drift concert at Harbor Hall in Pune."}
+ ],
+ "trace": {
+  "id": "synthetic",
+  "source": "telegram",
+  "messages": [
+   {"id": 1, "role": "user", "content": "I'm off to see Lumen Drift live in Pune tonight, at Harbor Hall. Can you check the traffic?"},
+   {"id": 2, "role": "assistant", "content": "Traffic is light until 7."}
+  ]
+ },
+ "expect": {"propose": [], "count": 0}
+}

@@ -90,7 +90,11 @@ func clip(s string, n int) string {
 
 // Sections builds the report's tables from the input. Every test that exists is listed, passed or not.
 func Sections(in Input) []Section {
-	return []Section{in.traceSection(), in.memtestSection(), in.retrievalSection(), in.goldenSection(), in.judgeSection()}
+	secs := []Section{in.traceSection(), in.memtestSection(), in.retrievalSection(), in.goldenSection(), in.judgeSection()}
+	if len(in.Jobs) > 0 {
+		secs = append([]Section{in.jobsSection()}, secs...)
+	}
+	return secs
 }
 
 func (in Input) traceSection() Section {

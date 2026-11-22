@@ -42,7 +42,7 @@ func realDreamRunDeps() dreamRunDeps {
 		}}
 }
 
-func runDreamRun(args []string, out io.Writer, d dreamRunDeps) error {
+func runDreamRun(args []string, out io.Writer, d dreamRunDeps) (retErr error) {
 	fs := flag.NewFlagSet("dream run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	s3 := fs.String("s3", "", "s3://bucket/evals prefix to read conversations from")
@@ -51,6 +51,7 @@ func runDreamRun(args []string, out io.Writer, d dreamRunDeps) error {
 	all := fs.Bool("all", false, "read every day in the store")
 	htmlOut := fs.String("html", "", "also write a review page (what it would propose, with the owner's words) to this file")
 	publish := fs.Bool("publish", false, "with -s3: upload the review page to the bucket and print a presigned link")
+	home := fs.String("home", defaultHome(), "the .chhaya directory (the run's record is written to its backups/)")
 	send := fs.Bool("send", false, "with -s3: also send the summary and the link on Telegram (the approver bot)")
 	gwEnv := fs.String("env", "deploy/.env.gateway", "gateway env file (the approver bot's token and chat)")
 	expires := fs.Duration("expires", 6*time.Hour, "how long the link works")
@@ -64,6 +65,16 @@ func runDreamRun(args []string, out io.Writer, d dreamRunDeps) error {
 	ledgerPath := fs.String("ledger", filepath.Join(defaultHome(), "dream-ledger.json"), "which conversations were read")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	// A real run that dies before it finishes still leaves a record, marked broken: the morning
+	// report must not read a night that failed early as a night with nothing to do.
+	stamped := false
+	if *propose {
+		defer func() {
+			if retErr != nil && !stamped {
+				jobreport.WriteStamp(stampPath(*home, dreamStamp), jobreport.Stamp{Time: d.now(), Failed: "the run failed: " + retErr.Error()})
+			}
+		}()
 	}
 	key, base := os.Getenv("PROXY_API_KEY"), os.Getenv("CHHAYA_HERMES_API_BASE")
 	if env, err := botguard.ReadEnvFile(*envFile); err == nil {
@@ -220,6 +231,21 @@ func runDreamRun(args []string, out io.Writer, d dreamRunDeps) error {
 	}
 	fmt.Fprintf(out, "read %d, skipped %d, deferred %d, errors %d; %d proposal(s) (%s), %d contradiction(s), %d refused; %d tokens in, %d out\n",
 		sum.Read, sum.Skipped, sum.Deferred, sum.Errors, sum.Proposed, mode, sum.Contradictions, sum.Refused, sum.Usage.In, sum.Usage.Out)
+	// The morning report vouches for this job from this record. A dry run is a human looking, not
+	// the job, so it leaves none; a run whose conversations errored is recorded as broken.
+	if *propose {
+		st := jobreport.Stamp{Time: d.now(), Detail: fmt.Sprintf("read %d, skipped %d, %d proposal(s), %d error(s)", sum.Read, sum.Skipped, sum.Proposed, sum.Errors)}
+		switch {
+		case err != nil:
+			st.Failed = "the run failed: " + err.Error()
+		case sum.Errors > 0:
+			st.Failed = fmt.Sprintf("%d conversation(s) errored", sum.Errors)
+		}
+		stamped = true
+		if serr := jobreport.WriteStamp(stampPath(*home, dreamStamp), st); serr != nil {
+			fmt.Fprintf(out, "warning: could not record this run: %v\n", serr)
+		}
+	}
 	if rerr := report(sum, err); rerr != nil {
 		if err == nil {
 			return rerr

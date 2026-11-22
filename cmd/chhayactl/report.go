@@ -15,12 +15,13 @@ import (
 	"github.com/satishthakur/chhaya/internal/approval"
 	"github.com/satishthakur/chhaya/internal/botguard"
 	"github.com/satishthakur/chhaya/internal/check"
+	"github.com/satishthakur/chhaya/internal/jobreport"
 	"github.com/satishthakur/chhaya/internal/memtest"
 	"github.com/satishthakur/chhaya/internal/nightly"
 	"github.com/satishthakur/chhaya/internal/trace"
 )
 
-const reportUsage = `chhayactl report nightly [-s3 URI] [-memory DIR] [-run-json FILE] [-env FILE] [-expires 6h] [-send]
+const reportUsage = `chhayactl report nightly [-s3 URI] [-memory DIR] [-home DIR] [-run-json FILE] [-env FILE] [-expires 6h] [-send]
 
   Runs the trace checks over yesterday and today (IST), the memory tests, and reads the memory
   canary's last result (memtest run -json). Prints the Telegram message. With -s3 it also uploads
@@ -57,6 +58,7 @@ func runReport(args []string, out io.Writer, d reportDeps) error {
 	s3 := fs.String("s3", "", "s3://bucket/evals prefix (traces are read from it; the report is written to it)")
 	dir := fs.String("dir", evalsDir(), "local evals directory when -s3 is not set")
 	mem := fs.String("memory", defaultMemoryDir(), "the memory root")
+	home := fs.String("home", defaultHome(), "the .chhaya directory (the jobs' last-run records are read from its backups/)")
 	runJSON := fs.String("run-json", filepath.Join(defaultHome(), "backups", "memrun.json"), "the canary's last result")
 	envFile := fs.String("env", "deploy/.env.gateway", "gateway env file (the approver bot's token and chat)")
 	expires := fs.Duration("expires", 6*time.Hour, "how long the link should work")
@@ -106,6 +108,8 @@ func runReport(args []string, out io.Writer, d reportDeps) error {
 		in.RunNote = err.Error()
 	}
 
+	in.Jobs = jobRecords(*home)
+
 	o := nightly.PublishOptions{S3: *s3, Expires: *expires, Run: d.run}
 	if *s3 != "" {
 		o.Dir = root
@@ -126,6 +130,35 @@ func runReport(args []string, out io.Writer, d reportDeps) error {
 		fmt.Fprintln(out, "sent")
 	}
 	return nil
+}
+
+// Where each unattended job leaves its record, under <home>/backups. The backup writes its own
+// (backup.Push); the export and the dreamer write theirs when they finish.
+const (
+	backupStamp = "last-success.json"
+	exportStamp = "trace-export.json"
+	dreamStamp  = "dream.json"
+)
+
+func stampPath(home, name string) string { return filepath.Join(home, "backups", name) }
+
+// jobRecords reads the records of the jobs the morning report vouches for.
+func jobRecords(home string) []nightly.Job {
+	var jobs []nightly.Job
+	for _, j := range []struct{ name, file, doc string }{
+		{"backup", backupStamp, "02:00 IST: stops the stack, takes a verified tarball of ~/.chhaya, restarts, uploads it to S3."},
+		{"trace export", exportStamp, "02:45 IST: builds a trace per recent session from state.db and the audit log and uploads them to the bucket."},
+		{"dreamer", dreamStamp, "02:40 IST: reads new owner conversations, proposes facts to the approver. Marked broken if any conversation errored."},
+	} {
+		job := nightly.Job{Name: j.name, Doc: j.doc}
+		if st, err := jobreport.ReadStamp(stampPath(home, j.file)); err == nil {
+			job.Stamp = &st
+		} else {
+			job.Why = err.Error()
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs
 }
 
 // approverTarget reads the approver bot's token and the one chat id it may write to.

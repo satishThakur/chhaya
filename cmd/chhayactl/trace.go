@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/satishthakur/chhaya/internal/check"
+	"github.com/satishthakur/chhaya/internal/jobreport"
 	"github.com/satishthakur/chhaya/internal/trace"
 )
 
@@ -129,6 +130,13 @@ func runTrace(args []string, out io.Writer, d traceDeps) error {
 		}
 		res, err := trace.Export(trace.ExportOptions{Home: *home, OutDir: o, S3: *s3, Since: window, Gap: *gap, Now: d.now(), Query: d.query, Run: d.run})
 		fmt.Fprintln(out, res)
+		// The morning report vouches for this job from this record. Only an upload counts: an export
+		// that stayed on the box protects nothing.
+		if err == nil && *s3 != "" {
+			if serr := jobreport.WriteStamp(stampPath(*home, exportStamp), jobreport.Stamp{Time: d.now(), Detail: res.String()}); serr != nil {
+				fmt.Fprintf(out, "warning: could not record this run: %v\n", serr)
+			}
+		}
 		if res.Flagged > 0 {
 			fmt.Fprintf(out, "note: %d trace(s) have gateway calls no message claimed; the page shows them in red\n", res.Flagged)
 		}

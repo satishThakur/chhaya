@@ -81,7 +81,7 @@ type proposeArgs struct {
 // memory itself; every proposal goes through Filter before it reaches the gateway, so what is policy
 // (owner-typed source, a real document, one valid line, no repeat, the cap) does not depend on the
 // model behaving. Provenance in the rationale is built here from the trace, not written by the model.
-func RunAgent(ctx context.Context, model memrun.Model, gw Gateway, t *trace.Trace, cap int) (AgentResult, error) {
+func RunAgent(ctx context.Context, model memrun.Model, gw Gateway, t *trace.Trace, cap int, prior ...Candidate) (AgentResult, error) {
 	var r AgentResult
 	if !Eligible(t) {
 		return r, fmt.Errorf("trace %s is not an owner conversation on Telegram", t.ID)
@@ -98,9 +98,15 @@ func RunAgent(ctx context.Context, model memrun.Model, gw Gateway, t *trace.Trac
 		}
 		facts = append(facts, memtest.FactsIn(p, body)...)
 	}
+	// What earlier conversations of this run already proposed is waiting for the owner's tap and is
+	// not in memory yet. Exact repeats are refused by Filter through Facts; the same fact worded
+	// differently is for the model to see, so it is told.
+	for _, p := range prior {
+		facts = append(facts, memtest.Fact{Path: p.Path, Text: p.Entry})
+	}
 	in := Input{Trace: t, Docs: paths, Facts: facts, Cap: cap}
 	msgs := []memrun.Message{
-		{Role: "system", Content: fmt.Sprintf(agentSystem, cap)},
+		{Role: "system", Content: fmt.Sprintf(agentSystem, cap) + priorBlock(prior)},
 		{Role: "user", Content: renderConversation(t)},
 	}
 	for r.Steps < maxAgentSteps {
@@ -120,6 +126,19 @@ func RunAgent(ctx context.Context, model memrun.Model, gw Gateway, t *trace.Trac
 		}
 	}
 	return r, fmt.Errorf("the agent did not finish within %d model calls", maxAgentSteps)
+}
+
+// priorBlock tells the agent what was proposed earlier in the same run.
+func priorBlock(prior []Candidate) string {
+	if len(prior) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\nAlready proposed earlier in this same run, from other conversations. Each waits for the owner's tap and is not in memory yet. Treat it as stored: do not propose the same fact again, even worded differently or with a little more detail. Compare meaning.\n")
+	for _, p := range prior {
+		fmt.Fprintf(&b, "- [%s] %s\n", p.Path, p.Entry)
+	}
+	return b.String()
 }
 
 func handle(ctx context.Context, gw Gateway, c memrun.ToolCall, in *Input, r *AgentResult) string {

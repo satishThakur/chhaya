@@ -569,11 +569,28 @@ func TestReportNightlyPrintsSendsAndNeverLeaksText(t *testing.T) {
 		t.Fatal("a bad subcommand must be an error")
 	}
 	out.Reset()
-	if err := runReport([]string{"nightly", "-dir", evals, "-memory", mem, "-run-json", rj, "-env", envf, "-send"}, &out, d); err != nil {
+	jhome := t.TempDir()
+	if err := runReport([]string{"nightly", "-dir", evals, "-memory", mem, "-home", jhome, "-run-json", rj, "-env", envf, "-send"}, &out, d); err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 	if len(rec.got) != 1 || !strings.Contains(rec.got[0], "traces: 1 checked") {
 		t.Fatalf("sent %v", rec.got)
+	}
+	// no job has left a record: the night is FAILED, naming each job
+	if m := rec.got[0]; !strings.Contains(m, "FAILED") || !strings.Contains(m, "backup FAILED") || !strings.Contains(m, "trace export FAILED") || !strings.Contains(m, "dreamer FAILED") {
+		t.Fatalf("a night where no job left a record must say so: %s", m)
+	}
+	// every job left a fresh record: the jobs line is clean
+	for _, f := range []string{backupStamp, exportStamp, dreamStamp} {
+		must(t, jobreport.WriteStamp(stampPath(jhome, f), jobreport.Stamp{Time: day.Add(-5 * time.Hour), Detail: "d"}))
+	}
+	rec.got = nil
+	out.Reset()
+	if err := runReport([]string{"nightly", "-dir", evals, "-memory", mem, "-home", jhome, "-run-json", rj, "-env", envf, "-send"}, &out, d); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if m := rec.got[0]; !strings.Contains(m, "jobs: backup ok, trace export ok, dreamer ok") || strings.Contains(m, "FAILED") {
+		t.Fatalf("message: %s", m)
 	}
 	if strings.Contains(rec.got[0]+out.String(), "SECRETWORD") || strings.Contains(out.String(), "tok-secret") {
 		t.Fatal("message text or the bot token leaked")
@@ -629,7 +646,8 @@ func TestDreamRunDryRunThenProposeOnAnOldTrace(t *testing.T) {
 		run:     func(string, ...string) ([]byte, error) { return nil, errors.New("no aws") },
 		connect: func(context.Context, string, string) (dreamGateway, error) { return gw, nil }}
 	ledger := filepath.Join(t.TempDir(), "ledger.json")
-	base := []string{"-dir", evals, "-day", "2026-11-16", "-env-file", envf, "-ledger", ledger}
+	jhome := t.TempDir()
+	base := []string{"-dir", evals, "-day", "2026-11-16", "-env-file", envf, "-ledger", ledger, "-home", jhome}
 
 	var out bytes.Buffer
 	if err := runDreamRun(base, &out, d); err != nil {
@@ -637,6 +655,9 @@ func TestDreamRunDryRunThenProposeOnAnOldTrace(t *testing.T) {
 	}
 	if len(gw.proposed) != 0 || !strings.Contains(out.String(), "would propose (dry run)") {
 		t.Fatalf("a dry run must send nothing:\n%s", out.String())
+	}
+	if _, err := jobreport.ReadStamp(stampPath(jhome, dreamStamp)); err == nil {
+		t.Fatal("a dry run is a person looking, not the job: it must leave no record")
 	}
 
 	newMemModel = func(string, string, string) memrun.Model {
@@ -651,6 +672,9 @@ func TestDreamRunDryRunThenProposeOnAnOldTrace(t *testing.T) {
 	}
 	if len(gw.proposed) != 1 || !strings.Contains(gw.proposed[0], "trace old1, msg 7") {
 		t.Fatalf("%v\n%s", gw.proposed, out.String())
+	}
+	if st, err := jobreport.ReadStamp(stampPath(jhome, dreamStamp)); err != nil || st.Failed != "" || !strings.Contains(st.Detail, "1 proposal") {
+		t.Fatalf("a finished real run leaves a clean record: %+v %v", st, err)
 	}
 	// a dry run with -html leaves a review page that quotes the owner
 	newMemModel = func(string, string, string) memrun.Model {
@@ -728,5 +752,51 @@ func TestDreamRunSendsASummaryWithNoTextAndALink(t *testing.T) {
 	}
 	if err := runDreamRun([]string{"-send", "-dir", evals, "-env-file", envf, "-env", gwenv}, &out, d); err == nil {
 		t.Fatal("-send without -s3 has nowhere to put the page and must be refused")
+	}
+}
+
+func TestDreamRunThatCannotReachTheGatewayLeavesABrokenRecord(t *testing.T) {
+	evals := t.TempDir()
+	os.MkdirAll(filepath.Join(evals, "days", "2026-11-16"), 0o755)
+	envf := filepath.Join(t.TempDir(), "env")
+	os.WriteFile(envf, []byte("PROXY_API_KEY=k\nCHHAYA_HERMES_API_BASE=http://x/v1\n"), 0o600)
+	d := dreamRunDeps{now: func() time.Time { return time.Date(2026, 11, 19, 3, 0, 0, 0, time.UTC) },
+		run: func(string, ...string) ([]byte, error) { return nil, errors.New("no aws") },
+		connect: func(context.Context, string, string) (dreamGateway, error) {
+			return nil, errors.New("connection refused")
+		}}
+	jhome := t.TempDir()
+	var out bytes.Buffer
+	args := []string{"-dir", evals, "-day", "2026-11-16", "-env-file", envf, "-ledger", filepath.Join(t.TempDir(), "l.json"), "-home", jhome, "-propose"}
+	if err := runDreamRun(args, &out, d); err == nil {
+		t.Fatal("expected the connection failure")
+	}
+	st, err := jobreport.ReadStamp(stampPath(jhome, dreamStamp))
+	if err != nil || !strings.Contains(st.Failed, "connection refused") {
+		t.Fatalf("a run that died before reading anything must say so: %+v %v", st, err)
+	}
+}
+
+func TestTraceExportRecordsItselfOnlyWhenItUploaded(t *testing.T) {
+	d := traceDeps{
+		now:   func() time.Time { return time.Unix(1794203400, 0) },
+		query: func(db, sql string) ([]byte, error) { return nil, nil },
+		run:   func(string, ...string) ([]byte, error) { return nil, nil },
+	}
+	home := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(home, "gateway"), 0o700))
+	must(t, os.WriteFile(filepath.Join(home, "gateway", "audit.jsonl"), nil, 0o600))
+	var out bytes.Buffer
+	if err := runTrace([]string{"export", "-home", home, "-out", t.TempDir()}, &out, d); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobreport.ReadStamp(stampPath(home, exportStamp)); err == nil {
+		t.Fatal("an export that stayed on the box protects nothing and must not be recorded as a success")
+	}
+	if err := runTrace([]string{"export", "-home", home, "-out", t.TempDir(), "-s3", "s3://b/evals"}, &out, d); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := jobreport.ReadStamp(stampPath(home, exportStamp)); err != nil || !strings.Contains(st.Detail, "exported 0 trace") {
+		t.Fatalf("%+v %v", st, err)
 	}
 }
