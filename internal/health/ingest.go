@@ -170,7 +170,7 @@ func (h *Ingest) run(w http.ResponseWriter, r *http.Request, tool string) {
 		err = errors.New("started_at and finished_at are required, in order")
 	case run.FinishedAt.After(h.o.Now().Add(time.Hour)):
 		err = errors.New("finished_at is in the future")
-	case run.Metrics < 0 || run.Activities < 0 || len(run.Days) > 31:
+	case run.Metrics < 0 || run.Activities < 0 || len(run.Days) > 366:
 		err = errors.New("counts out of range")
 	}
 	if err != nil {

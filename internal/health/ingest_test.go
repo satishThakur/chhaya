@@ -3,6 +3,7 @@ package health
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -245,5 +246,28 @@ func TestReadyNeedsNoSecretAndHoldsNoData(t *testing.T) {
 	r.h.ServeHTTP(w, req)
 	if w.Code != 200 || strings.Contains(w.Body.String(), "steps") {
 		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}
+
+func TestABackfillRunRecordOfSixtyDaysIsAcceptedButNotAnAbsurdOne(t *testing.T) {
+	r := newRig(t)
+	days := func(n int) string {
+		var b strings.Builder
+		for i := 0; i < n; i++ {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			fmt.Fprintf(&b, `"2026-01-%02d"`, i%28+1)
+		}
+		return b.String()
+	}
+	body := func(n int) string {
+		return `{"started_at":"2026-11-22T05:00:00Z","finished_at":"2026-11-22T05:02:00Z","status":"ok","days":[` + days(n) + `],"metrics":1464,"activities":36}`
+	}
+	if w := r.post("/ingest/run", secret, body(61)); w.Code != 200 {
+		t.Fatalf("a 60-day backfill's run record was refused: %d %s", w.Code, w.Body)
+	}
+	if w := r.post("/ingest/run", secret, body(400)); w.Code != 400 {
+		t.Fatalf("an absurd run record was accepted: %d", w.Code)
 	}
 }
