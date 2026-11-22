@@ -60,3 +60,11 @@ CHHAYA_BACKUP_S3=s3://chhaya-backup-803874683069-ap-south-1/backups
 # page, as every job does. At most 5 proposals a night (config/policy.yaml). When it finishes it
 # leaves ~/.chhaya/backups/dream.json, which the morning report reads. docs/decisions.md 2026-11-21.
 10 21 * * * cd /home/ubuntu/chhaya && go build -o bin/chhayactl ./cmd/chhayactl && bin/chhayactl dream run -s3 s3://chhaya-backup-803874683069-ap-south-1/evals -propose -publish -send -env deploy/.env.gateway >> /home/ubuntu/.chhaya/backups/dream.log 2>&1
+
+# Health data from the desktop: every 15 minutes, move what the desktop's Garmin sync left in
+# s3://BUCKET/health/inbox/ into the gateway (loopback ingest, strict decoder), then file it under
+# processed/ or rejected/. Prints nothing when the inbox is empty; a document the gateway refuses is
+# sent to you on Telegram once. Garmin refuses sign-ins from AWS, so the sync runs on the desktop and
+# the box holds no Garmin login. The morning report's "health sync" row shows when the last desktop
+# run arrived. docs/health.md, "Where the sync runs".
+*/15 * * * * cd /home/ubuntu/chhaya && go build -o bin/chhayactl ./cmd/chhayactl && bin/chhayactl health pull -s3 s3://chhaya-backup-803874683069-ap-south-1/health -send >> /home/ubuntu/.chhaya/backups/health-pull.log 2>&1

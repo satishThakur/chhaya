@@ -129,3 +129,62 @@ class Post(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeS3:
+    def __init__(self, fail=False):
+        self.puts, self.fail = [], fail
+
+    def put_object(self, **kw):
+        if self.fail:
+            raise RuntimeError("AccessDenied")
+        self.puts.append(kw)
+
+
+class S3Sink(unittest.TestCase):
+    URI = "s3://chhaya-test-bucket/health/inbox"
+
+    def test_a_day_and_a_run_become_objects_the_box_can_route_by_name(self):
+        from garmin_sync import sink
+        c = FakeS3()
+        post = sink.make(self.URI, client=c)
+        post("u", "s", "/ingest/day", {"date": "2026-11-22", "sleep": {"sleep_hours": 7}})
+        post("u", "s", "/ingest/run", {"finished_at": "2026-11-22T06:00:00Z", "status": "ok"})
+        keys = [p["Key"] for p in c.puts]
+        self.assertRegex(keys[0], r"^health/inbox/day-2026-11-22-[0-9a-f]{10}\.json$")
+        self.assertRegex(keys[1], r"^health/inbox/run-20261122T060000Z-[0-9a-f]{10}\.json$")
+        self.assertLess(keys[0].split("/")[-1], keys[1].split("/")[-1])  # days sort before the run
+        self.assertEqual(c.puts[0]["ServerSideEncryption"], "AES256")
+        self.assertEqual(c.puts[0]["Bucket"], "chhaya-test-bucket")
+
+    def test_the_same_day_is_the_same_key_and_a_changed_day_is_not(self):
+        from garmin_sync import sink
+        a = sink.key_for("p", "/ingest/day", {"date": "2026-11-22", "x": 1})[0]
+        self.assertEqual(a, sink.key_for("p", "/ingest/day", {"x": 1, "date": "2026-11-22"})[0])
+        self.assertNotEqual(a, sink.key_for("p", "/ingest/day", {"date": "2026-11-22", "x": 2})[0])
+
+    def test_a_failed_put_is_an_ingest_error_and_the_pass_reports_it(self):
+        from garmin_sync import sink
+        post = sink.make(self.URI, client=FakeS3(fail=True))
+        run, _ = RunOnce().run_it(post=post)
+        self.assertEqual(run["status"], "failed")
+        self.assertTrue(any("S3 put failed" in e for e in run["errors"]))
+
+    def test_a_bad_uri_stops_the_start(self):
+        from garmin_sync import sink
+        for bad in ("", "http://x/y", "s3://bucket", "s3://ab/x"):
+            with self.assertRaises(SystemExit):
+                sink.split_uri(bad)
+
+    def test_s3_mode_needs_no_gateway_secret(self):
+        env = {"GARMIN_EMAIL": "a", "GARMIN_PASSWORD": "b", "HEALTH_S3_URI": self.URI}
+        self.assertEqual(main.config_from_env(env)["s3_uri"], self.URI)
+        with self.assertRaises(SystemExit):
+            main.config_from_env({"GARMIN_EMAIL": "a", "GARMIN_PASSWORD": "b"})
+
+
+class Count(unittest.TestCase):
+    def test_a_timestamp_in_a_section_is_not_counted_as_a_metric(self):
+        doc = {"date": "2026-11-21", "sleep": {"total_seconds": 27720.0, "ended_at": "2026-11-21T03:48:31Z"},
+               "stress": {"avg": 37.0}, "activities": [{"type": "run"}]}
+        self.assertEqual(main.count(doc), (2, 1))

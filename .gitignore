@@ -48,3 +48,6 @@ infra/terraform/.terraform/
 *.tfstate.*
 *.tfvars
 crash.log
+
+__pycache__/
+*.pyc

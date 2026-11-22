@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from . import client as garmin
-from . import ingest, transform
+from . import ingest, sink, transform
 
 log = logging.getLogger("garmin_sync")
 
@@ -43,11 +43,14 @@ def build_day(date, raw):
 
 
 def count(doc):
-    metrics = sum(len(v) for k, v in doc.items() if isinstance(v, dict))
+    # Numbers only: a section's timestamps (sleep's ended_at) are not metrics.
+    metrics = sum(1 for v in doc.values() if isinstance(v, dict) for x in v.values() if isinstance(x, (int, float)))
     return metrics, len(doc.get("activities", []))
 
 
 def run_once(cfg, now=None, garmin_login=garmin.login, fetch=garmin.fetch, post=ingest.post, dry_run=False, back=1):
+    if cfg.get("s3_uri") and post is ingest.post and not dry_run:
+        post = sink.make(cfg["s3_uri"])
     tz = ZoneInfo(cfg["tz"])
     now = now or datetime.now(timezone.utc)
     today = now.astimezone(tz).date()
@@ -96,11 +99,13 @@ def run_once(cfg, now=None, garmin_login=garmin.login, fetch=garmin.fetch, post=
 
 
 def config_from_env(env=os.environ):
-    need = ("GARMIN_EMAIL", "GARMIN_PASSWORD", "CHHAYA_HEALTH_INGEST_SECRET")
+    # With HEALTH_S3_URI the documents go to a bucket and no gateway secret is needed; without it
+    # they are posted to the gateway's ingest listener.
+    need = ["GARMIN_EMAIL", "GARMIN_PASSWORD"] + ([] if env.get("HEALTH_S3_URI") else ["CHHAYA_HEALTH_INGEST_SECRET"])
     missing = [k for k in need if not env.get(k)]
     if missing:
         raise SystemExit("missing environment: " + ", ".join(missing))
-    return {"email": env["GARMIN_EMAIL"], "password": env["GARMIN_PASSWORD"], "secret": env["CHHAYA_HEALTH_INGEST_SECRET"],
+    return {"email": env["GARMIN_EMAIL"], "password": env["GARMIN_PASSWORD"], "secret": env.get("CHHAYA_HEALTH_INGEST_SECRET", ""), "s3_uri": env.get("HEALTH_S3_URI", ""),
             "url": env.get("CHHAYA_HEALTH_INGEST_URL", "http://gateway:8444"), "tz": env.get("CHHAYA_HEALTH_TZ", "Asia/Kolkata"),
             "tokendir": env.get("GARMIN_TOKENDIR", "/tokens"), "every": int(env.get("SYNC_EVERY_MINUTES", "180"))}
 
@@ -109,18 +114,18 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Garmin -> gateway health sync")
     ap.add_argument("--once", action="store_true", help="one pass, then exit (non-zero unless it fully succeeded)")
     ap.add_argument("--dry-run", action="store_true", help="fetch and show what would be posted; post nothing (implies --once)")
-    ap.add_argument("--days", type=int, default=1, metavar="N", help="also fetch the N days before today (default 1; use e.g. 30 once to backfill). Implies --once")
+    ap.add_argument("--days", type=int, default=None, metavar="N", help="also fetch the N days before today (the loop uses 2; use e.g. 30 once to backfill). Implies --once")
     args = ap.parse_args(argv)
-    if not 1 <= args.days <= 365:
+    if args.days is not None and not 1 <= args.days <= 365:
         ap.error("--days must be between 1 and 365")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     cfg = config_from_env()
-    if args.once or args.dry_run or args.days != 1:
-        run = run_once(cfg, dry_run=args.dry_run, back=args.days)
+    if args.once or args.dry_run or args.days is not None:
+        run = run_once(cfg, dry_run=args.dry_run, back=args.days or 2)
         return 0 if run["status"] == "ok" else 1
     while True:
         try:
-            run = run_once(cfg)
+            run = run_once(cfg, back=2)  # the box may have been off a day; re-posting a day is safe
             log.info("pass finished: %s (%d metrics, %d activities, %d errors)", run["status"], run["metrics"], run["activities"], len(run["errors"]))
         except Exception:
             log.exception("a pass crashed")

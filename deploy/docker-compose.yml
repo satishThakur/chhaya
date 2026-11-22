@@ -36,6 +36,10 @@ services:
       - ./certs:/etc/chhaya/certs:ro
     ports:
       - "127.0.0.1:8443:8443"     # localhost only; nothing about this is internet-facing
+      # The health ingest, on the host's loopback only: the box's `chhayactl health pull` cron posts
+      # here. Hermes (another container) cannot reach the host's loopback; the shared secret still
+      # guards it. Unused when COMPOSE_PROFILES lacks health (nothing listens then).
+      - "127.0.0.1:8444:8444"
     restart: unless-stopped
 
   # --- the health module's two helpers; only started with COMPOSE_PROFILES=health ---------
@@ -64,8 +68,11 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # The Garmin sync. Started only where deploy/.env.health has a Garmin login: the DESKTOP, whose home
+  # IP Garmin accepts (it refuses AWS's). With HEALTH_S3_URI it writes to the bucket and the box
+  # pulls; without it, it posts to the gateway in this same stack. The box has no Garmin login.
   garmin-sync:
-    profiles: ["health"]
+    profiles: ["garmin"]
     build:
       context: ../sync/garmin
     # The operator's uid, so the saved Garmin tokens in the bind mount are the operator's files.
@@ -77,13 +84,17 @@ services:
       GARMIN_PASSWORD: ${GARMIN_PASSWORD:-}
       CHHAYA_HEALTH_INGEST_SECRET: ${CHHAYA_HEALTH_INGEST_SECRET:-}
       CHHAYA_HEALTH_INGEST_URL: http://gateway:8444
+      HEALTH_S3_URI: ${HEALTH_S3_URI:-}
+      # Credentials for a put-only IAM user on the inbox prefix (infra/terraform/health.tf). Empty
+      # means the default AWS credential chain, which in this container finds nothing.
+      AWS_ACCESS_KEY_ID: ${HEALTH_AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${HEALTH_AWS_SECRET_ACCESS_KEY:-}
+      AWS_DEFAULT_REGION: ${HEALTH_AWS_REGION:-ap-south-1}
       CHHAYA_HEALTH_TZ: ${CHHAYA_HEALTH_TZ:-Asia/Kolkata}
       SYNC_EVERY_MINUTES: ${SYNC_EVERY_MINUTES:-180}
       GARMIN_TOKENDIR: /tokens
     volumes:
       - ${CHHAYA_HEALTH_HOME:-/nonexistent}/garmin:/tokens
-    depends_on:
-      - gateway
     restart: unless-stopped
 
   hermes:
