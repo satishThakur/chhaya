@@ -116,3 +116,42 @@ func TestLedgerSurvivesARestart(t *testing.T) {
 		t.Fatalf("%v %+v", err, l2)
 	}
 }
+
+func TestWhatOneConversationProposedIsToldToTheNextAgentInTheSameRun(t *testing.T) {
+	g := &fakeGW{docs: map[string]string{"interests": "# Interests\n"}}
+	// One scripted model serves both conversations: its first turn proposes, every later turn ends.
+	m := &script{turns: [][]memrun.ToolCall{{tc("1", "propose_fact", map[string]any{
+		"path": "interests", "entry": "Is attending a Lumen Drift concert in Pune.", "rationale": "said so", "source": []int64{1}})}}, text: "done"}
+	t1 := mkTrace("a", "telegram", "2026-11-20T08:00:00Z", ownerSays(1, "I am going to the Lumen Drift concert in Pune"))
+	t2 := mkTrace("b", "telegram", "2026-11-20T09:00:00Z", ownerSays(1, "Off to see Lumen Drift live tonight"))
+	var out bytes.Buffer
+	if _, err := RunTraces(context.Background(), m, g, []*trace.Trace{t1, t2}, RunOptions{Budget: 5, Propose: true}, &out); err != nil {
+		t.Fatal(err)
+	}
+	// calls: 0 = first conversation proposes, 1 = it ends, 2 = the second conversation starts
+	if len(m.seen) < 3 {
+		t.Fatalf("both conversations must be read; the model was called %d time(s)", len(m.seen))
+	}
+	if strings.Contains(m.seen[0][0].Content, "Already proposed earlier") {
+		t.Fatal("the first agent has nothing prior and must not be told so")
+	}
+	sys := m.seen[2][0].Content
+	if !strings.Contains(sys, "Already proposed earlier in this same run") || !strings.Contains(sys, "[interests] Is attending a Lumen Drift concert in Pune.") {
+		t.Fatalf("the second agent must be told what is already waiting for a tap:\n%s", sys)
+	}
+}
+
+func TestADryRunTellsLaterAgentsToo(t *testing.T) {
+	g := &fakeGW{docs: map[string]string{"interests": "# Interests\n"}}
+	m := &script{turns: [][]memrun.ToolCall{{tc("1", "propose_fact", map[string]any{
+		"path": "interests", "entry": "Owns a Lumen Drift vinyl.", "rationale": "said so", "source": []int64{1}})}}, text: "done"}
+	t1 := mkTrace("a", "telegram", "2026-11-20T08:00:00Z", ownerSays(1, "I own a Lumen Drift vinyl"))
+	t2 := mkTrace("b", "telegram", "2026-11-20T09:00:00Z", ownerSays(1, "my Lumen Drift record is lovely"))
+	var out bytes.Buffer
+	if _, err := RunTraces(context.Background(), m, g, []*trace.Trace{t1, t2}, RunOptions{Budget: 5}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.seen) < 3 || !strings.Contains(m.seen[2][0].Content, "Owns a Lumen Drift vinyl.") {
+		t.Fatal("a dry run must show what a real run would, or its page misleads")
+	}
+}

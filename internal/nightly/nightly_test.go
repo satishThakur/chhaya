@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/satishthakur/chhaya/internal/check"
+	"github.com/satishthakur/chhaya/internal/jobreport"
 	"github.com/satishthakur/chhaya/internal/memrun"
 	"github.com/satishthakur/chhaya/internal/memtest"
 )
@@ -270,5 +271,65 @@ func TestRunFileRoundTripAndMissing(t *testing.T) {
 	os.WriteFile(p, []byte("{not json"), 0o600)
 	if _, err := ReadRunFile(p); err == nil {
 		t.Fatal("garbage must be an error")
+	}
+}
+
+func job(name string, ago time.Duration, failed string) Job {
+	return Job{Name: name, Doc: name + " does a thing", Stamp: &jobreport.Stamp{Time: now.Add(-ago), Detail: "detail line", Failed: failed}}
+}
+
+func TestJobsThatRanAreOkAndNamedInTheMessage(t *testing.T) {
+	in := goodInput()
+	in.Jobs = []Job{job("backup", 5*time.Hour, ""), job("trace export", 4*time.Hour, "")}
+	if in.Verdict() != OK {
+		t.Fatalf("verdict %v", in.Verdict())
+	}
+	if m := Message(in, ""); !strings.Contains(m, "jobs: backup ok, trace export ok") {
+		t.Fatalf("message: %q", m)
+	}
+}
+
+func TestAJobWithNoRecordAnOldOneOrABrokenRunFailsTheNight(t *testing.T) {
+	for name, j := range map[string]Job{
+		"never ran": {Name: "dreamer", Why: "no such file"},
+		"stale":     job("dreamer", 30*time.Hour, ""),
+		"broken":    job("dreamer", time.Hour, "2 error(s)"),
+	} {
+		in := goodInput()
+		in.Jobs = []Job{job("backup", time.Hour, ""), j}
+		if in.Verdict() != Failed {
+			t.Errorf("%s: verdict %v, want failed", name, in.Verdict())
+		}
+		m := Message(in, "")
+		if !strings.Contains(m, "FAILED") || !strings.Contains(m, "dreamer FAILED") || !strings.Contains(m, "backup ok") {
+			t.Errorf("%s: message %q", name, m)
+		}
+	}
+}
+
+func TestNoJobsMeansNoJobsLineAndNoSection(t *testing.T) {
+	in := goodInput()
+	if strings.Contains(Message(in, ""), "jobs:") {
+		t.Fatal("a report that did not look at jobs must not print a jobs line")
+	}
+	for _, s := range Sections(in) {
+		if s.Title == "Nightly jobs" {
+			t.Fatal("a jobs section with no jobs")
+		}
+	}
+}
+
+func TestTheJobsSectionHasARowPerJobAndFailureDetail(t *testing.T) {
+	in := goodInput()
+	in.Jobs = []Job{job("backup", time.Hour, ""), job("dreamer", time.Hour, "gateway unreachable")}
+	secs := Sections(in)
+	if secs[0].Title != "Nightly jobs" || len(secs[0].Rows) != 2 {
+		t.Fatalf("sections: %+v", secs[0])
+	}
+	if secs[0].Rows[1].Status != Fail || !strings.Contains(secs[0].Rows[1].Detail, "gateway unreachable") {
+		t.Fatalf("row: %+v", secs[0].Rows[1])
+	}
+	if !strings.Contains(HTML(in), "gateway unreachable") {
+		t.Fatal("the page does not show why")
 	}
 }

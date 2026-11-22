@@ -1,0 +1,21 @@
+{
+ "id": "pending-does-not-hide-new-facts",
+ "note": "A pending proposal about one thing must not stop a different new fact from the same artist being proposed.",
+ "cap": 5,
+ "memory": {
+  "interests": [
+   "Enjoys the band Lumen Drift. <!-- proposal 20261103-0abc000000005aaa, approved 2026-11-03 -->"
+  ]
+ },
+ "prior": [
+  {"path": "interests", "entry": "Is attending a Lumen Drift concert at Harbor Hall in Pune."}
+ ],
+ "trace": {
+  "id": "synthetic",
+  "source": "telegram",
+  "messages": [
+   {"id": 1, "role": "user", "content": "I own every Lumen Drift vinyl, the first pressing of Salt Lines is my favourite."}
+  ]
+ },
+ "expect": {"propose": [{"path": "interests", "all": ["vinyl"], "source": [1]}]}
+}

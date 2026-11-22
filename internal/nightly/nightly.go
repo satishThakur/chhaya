@@ -74,6 +74,7 @@ type Input struct {
 	Problems []string      // traces that could not be read
 	Memtest  *memtest.Report
 	Run      *RunFile
+	Jobs     []Job  // the unattended jobs and their last records; none means the report did not look
 	RunNote  string // why Run is nil, for the report
 	Now      time.Time
 }
@@ -97,7 +98,7 @@ func (in Input) counts() (fail int, flags map[string]int) {
 
 func (in Input) Verdict() Verdict {
 	fail, flags := in.counts()
-	if fail > 0 || len(in.Problems) > 0 || in.Memtest == nil || in.Memtest.Failures() > 0 || in.runStale() || in.Run.Result.Gate() > 0 {
+	if fail > 0 || len(in.Problems) > 0 || in.Memtest == nil || in.Memtest.Failures() > 0 || in.runStale() || in.Run.Result.Gate() > 0 || in.jobsFailing() > 0 {
 		return Failed
 	}
 	if len(flags) > 0 {
@@ -182,6 +183,9 @@ func Message(in Input, link string) string {
 	default:
 		got, scored, pass, gfail, pend := in.probeSummary()
 		fmt.Fprintf(&b, "memory canary: fact reached the model %d/%d, golden pass %d fail %d pending %d, judge %d wrong (informational)\n", got, scored, pass, gfail, pend, in.Run.Result.Wrong())
+	}
+	if len(in.Jobs) > 0 {
+		b.WriteString(in.jobsLine() + "\n")
 	}
 	if link != "" {
 		fmt.Fprintf(&b, "report: %s\n", link)

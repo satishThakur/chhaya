@@ -69,6 +69,7 @@ func RunTraces(ctx context.Context, model memrun.Model, gw Gateway, traces []*tr
 	if !o.Propose {
 		gw = dryGateway{gw}
 	}
+	var prior []Candidate // proposed so far in this run: waiting for a tap, not in memory yet
 	for _, t := range traces {
 		last := t.LastMessage.UTC().Format(time.RFC3339)
 		switch {
@@ -91,7 +92,7 @@ func RunTraces(ctx context.Context, model memrun.Model, gw Gateway, traces []*tr
 		if budget < per {
 			per = budget
 		}
-		r, err := RunAgent(ctx, model, gw, t, per)
+		r, err := RunAgent(ctx, model, gw, t, per, prior...)
 		s.Usage.In, s.Usage.Out = s.Usage.In+r.Usage.In, s.Usage.Out+r.Usage.Out
 		tr := TraceResult{ID: t.ID, Day: t.Day, Messages: len(t.Messages), Proposed: r.Proposed,
 			Contradictions: r.Contradictions, Refused: r.Refused, Quotes: quotes(t, r), First: firstOwner(t)}
@@ -103,6 +104,7 @@ func RunTraces(ctx context.Context, model memrun.Model, gw Gateway, traces []*tr
 			continue
 		}
 		s.Results = append(s.Results, tr)
+		prior = append(prior, r.Proposed...)
 		s.Read++
 		verb := "proposed"
 		if !o.Propose {
