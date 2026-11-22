@@ -130,3 +130,14 @@ The sync is a loop in the `garmin-sync` container: every `SYNC_EVERY_MINUTES` (d
 - Look first, post nothing: add `--dry-run`.
 - Backfill history once: `... --once --days 30` (up to 365; older days first). Garmin rate-limits, so do big backfills in chunks.
 - There is no HTTP trigger: the ingest port only accepts data, and the sidecar holds the Garmin login, so "start a sync" is a command on the desktop (`health-sync-up`, or the `--once` line above), not an API.
+
+## The digest tool and the morning digest
+
+`health.get_digest(date?)` (tier 0, read, Trusted) returns one local day set against the owner's own previous 30 days, worked out in `internal/health/digest.go` and not by the model: per metric the value, the owner's usual (mean, spread), whether it is typical, notable or marked (within 1, 1 to 2, 2 or more standard deviations), above or below, and whether that direction is better or worse (a metric with no good direction, such as deep sleep, gets no reading); a 7-day-against-previous-7 trend; the notable findings in order; missing metrics; workout load; freshness. Rules that matter:
+
+- Nothing is judged with fewer than 14 baseline days, and the reason is in the answer.
+- On today, accumulating figures (steps, stress, body battery high) are part-day and are not judged; overnight ones (sleep, HRV, resting heart rate, body battery charged) are.
+- Every number has a `display` string ("7h 42m", "37 ms"): the digest quotes that, so a check for invented numbers has a fixed set to compare against.
+- No data for today falls back to the newest day with data and says so; more than 2 days behind is `stale`.
+
+The skill `hermes/skills/health/health-digest/SKILL.md` is the one place the wording rules live (copied into Hermes' skills directory by `scripts/dev.sh up`). The Hermes cron job "Morning Health Digest" runs it at 08:00 IST (`scripts/dev.sh health-digest-cron` creates it) and Hermes sends the result to Telegram. A Go job with an HTML page, a number check and its own actor is the planned next step.

@@ -941,3 +941,7 @@ TimescaleDB's data is `~/.chhaya/health/pgdata` on the host (bind mount), not a 
 **Kept as a fallback, not a plan A:** copying the desktop's Garmin tokens to the box (the token refresh calls the same blocked host). **Open:** intervals.icu as the source instead of Garmin (checking which fields it carries); if it covers what we use, the pull job would poll its API and this sidecar becomes the backup.
 
 **Costs.** No data while the desktop is off; the staleness text and the morning report show it. One more cron line and one IAM user.
+
+## 2026-11-22: morning health digest first as a Hermes cron plus a skill
+
+The metrics are computed in the gateway (`health.get_digest`) so a model never recomputes a comparison. For the first morning the digest is a Hermes cron job that follows the `health-digest` skill and sends text to Telegram, because it needs no new actor, certificate or S3 write path and is evaluable from its trace. The planned replacement is a `chhayactl` job that calls the same tool under its own actor, asks a model (no tools) for the interpretation, checks that every number quoted is in the tool's answer, and publishes an HTML page; it was not built first because it needs a policy change, a certificate and a model client. First test run (22 Nov, the day in progress) broke one skill rule: it called today's steps "low so far", a verdict on a part-day figure.
