@@ -86,6 +86,7 @@ func TestTheRegisteredSetIsExactlyWhatWeExpect(t *testing.T) {
 		"memory.get":            {policy.TierInternal, policy.Read, mcpsrv.Trusted},
 		"memory.list":           {policy.TierInternal, policy.Read, mcpsrv.Trusted},
 		"memory.propose_update": {policy.TierInternal, policy.Write, mcpsrv.Trusted},
+		"memory.propose_remove": {policy.TierInternal, policy.Write, mcpsrv.Trusted},
 		"capabilities":          {policy.TierInternal, policy.Read, mcpsrv.Trusted},
 	}
 
@@ -396,5 +397,85 @@ func TestMemoryListWithAMissingRootFailsClosed(t *testing.T) {
 	d.MemoryRoot = filepath.Join(t.TempDir(), "gone")
 	if _, err := find(t, All(d), "memory.list").Handle(context.Background(), nil); err == nil {
 		t.Fatal("listing a missing memory root returned success")
+	}
+}
+
+const removeDoc = "# Food\n\n- No coriander. <!-- proposal 20261030-aaaaaaaaaaaaaaaa, approved 2026-10-30 -->\n- No okra. <!-- proposal 20261030-bbbbbbbbbbbbbbbb, approved 2026-10-30 -->\n"
+
+func removeDeps(t *testing.T) (Deps, string) {
+	t.Helper()
+	d := deps(t)
+	doc := filepath.Join(d.MemoryRoot, "taste", "food.md")
+	if err := os.WriteFile(doc, []byte(removeDoc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return d, doc
+}
+
+func TestProposeRemoveStagesAndCardsAndTouchesNothing(t *testing.T) {
+	d, doc := removeDeps(t)
+	out, err := find(t, All(d), "memory.propose_remove").Handle(context.Background(), map[string]any{
+		"path": "taste/food", "fact_id": "20261030-bbbbbbbbbbbbbbbb", "rationale": "said twice",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := out.(map[string]any)
+	if m["status"] != "sent for approval" || m["removes"] != "No okra." {
+		t.Fatalf("result %v", m)
+	}
+	n := d.Notifier.(*fakeNotifier)
+	if len(n.got) != 1 || n.got[0].Remove != "20261030-bbbbbbbbbbbbbbbb" || n.got[0].Entry != "" {
+		t.Fatalf("notifier got %+v", n.got)
+	}
+	if b, _ := os.ReadFile(doc); string(b) != removeDoc {
+		t.Fatal("propose_remove edited memory directly; it must only propose")
+	}
+	if len(proposalFiles(t, d.MemoryRoot)) != 1 {
+		t.Fatalf("proposal files: %v", proposalFiles(t, d.MemoryRoot))
+	}
+}
+
+func TestProposeRemoveRefusesWhatItCannotName(t *testing.T) {
+	d, doc := removeDeps(t)
+	h := find(t, All(d), "memory.propose_remove").Handle
+	for name, a := range map[string]map[string]any{
+		"unknown id":   {"path": "taste/food", "fact_id": "20261030-cccccccccccccccc", "rationale": "r"},
+		"id is a path": {"path": "taste/food", "fact_id": "../x", "rationale": "r"},
+		"no rationale": {"path": "taste/food", "fact_id": "20261030-bbbbbbbbbbbbbbbb", "rationale": ""},
+		"outside root": {"path": "../outside", "fact_id": "20261030-bbbbbbbbbbbbbbbb", "rationale": "r"},
+		"hidden tests": {"path": ".tests/probes", "fact_id": "20261030-bbbbbbbbbbbbbbbb", "rationale": "r"},
+		"missing args": {},
+	} {
+		if _, err := h(context.Background(), a); err == nil {
+			t.Errorf("%s: expected a refusal", name)
+		}
+	}
+	if b, _ := os.ReadFile(doc); string(b) != removeDoc || len(d.Notifier.(*fakeNotifier).got) != 0 || len(proposalFiles(t, d.MemoryRoot)) != 0 {
+		t.Fatal("a refused removal left something behind")
+	}
+}
+
+func TestProposeRemoveWithAFailingNotifierStagesNothing(t *testing.T) {
+	d, doc := removeDeps(t)
+	d.Notifier = &fakeNotifier{err: errors.New("telegram down")}
+	_, err := find(t, All(d), "memory.propose_remove").Handle(context.Background(), map[string]any{
+		"path": "taste/food", "fact_id": "20261030-bbbbbbbbbbbbbbbb", "rationale": "r",
+	})
+	if err == nil || !strings.Contains(err.Error(), "nothing was removed") {
+		t.Fatalf("err = %v", err)
+	}
+	if b, _ := os.ReadFile(doc); string(b) != removeDoc || len(proposalFiles(t, d.MemoryRoot)) != 0 {
+		t.Fatal("a failed notification left a proposal or changed the document")
+	}
+}
+
+func TestProposeRemoveWithNoNotifierFailsClosed(t *testing.T) {
+	d, _ := removeDeps(t)
+	d.Notifier = nil
+	if _, err := find(t, All(d), "memory.propose_remove").Handle(context.Background(), map[string]any{
+		"path": "taste/food", "fact_id": "20261030-bbbbbbbbbbbbbbbb", "rationale": "r",
+	}); err == nil || len(proposalFiles(t, d.MemoryRoot)) != 0 {
+		t.Fatalf("err = %v", err)
 	}
 }

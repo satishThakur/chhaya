@@ -898,3 +898,12 @@ second user or inbound access, or the bot naming convention stops being enforcea
 **Would reopen if:** the approval rate falls under about half, or a night's cards are mostly noise.
 
 **2026-11-21, one-time exception:** the owner approved removing a duplicate concert line by `git revert` in the memory repo (revert commit `6c0e5ac`), because the gateway has no remove path. Not a precedent. Backlog: a tapped `memory.propose_remove` (reword, supersede, delete), so wrong or duplicate lines can leave through the gateway.
+
+## 2026-11-22: `memory.propose_remove`, a tapped removal tool
+
+**Decided:** a second memory write tool. `memory.propose_remove(path, fact_id, rationale)` names one line by the proposal id stamped on it. Like `propose_update` it stages a proposal and sends a card (the line struck through, "approve REMOVING this line?"); only the owner's tap removes it. Tier 0 write, same rate limit and taint rule as `propose_update`. The apply path is the same `ApplyApproved`, still called only from the approver's tap handler (the AST test still holds).
+**What the gateway checks, in code:** the id must be in the proposal-id format and carried by exactly one bullet line of that document; the document path resolves inside the root and not into a dot-directory; a rationale is present. At the tap and again at apply, the line must still read exactly as the card showed it, so an approval cannot be carried onto other words; a proposal file edited on disk is refused. A line already gone (a crash before the commit) is finished, not an error. The file is rewritten in place, so its inode and mode survive. The commit is `memory: remove from DOC (proposal ID removes TARGET)`, and the audit record of the tap carries both ids and never the line.
+**Who may call it:** Hermes only. The dreamer's allowlist is still `list`, `get`, `propose_update` (a test per actor proves `propose_remove` is refused with `actor.tool_not_allowed`), and the approver may only apply. The dreamer finding a contradiction still reports it and adds nothing; removal stays a thing the owner asks for.
+**Not built (on purpose):** reword and supersede are a remove plus an add, two taps. A batched card. The removed text is not kept outside git history and the applied proposal file.
+**Consequence for the memory tests:** removing a fact a probe is about makes `memtest check` fail ("probe is about a fact not in memory"). That is right: the owner retires the probe in `.tests/` deliberately, the agent cannot.
+**Supersedes** the 2026-11-21 one-time-exception note's backlog item.

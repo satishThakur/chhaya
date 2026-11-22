@@ -110,6 +110,36 @@ func All(d Deps) []mcpsrv.Registration {
 			},
 		},
 		{
+			Name: "memory.propose_remove",
+			Description: "Propose taking ONE existing line out of a Personal memory document: a duplicate, a fact that is no longer true, or a line the user asked you to forget. " +
+				"This does NOT edit the document: it sends the line to the user's approver bot, and the gateway removes it only if they tap approve. " +
+				"Name the line by its proposal id, the value after \"proposal\" at the end of the line in memory.get (e.g. 20261106-0123456789abcdef). " +
+				"If a fact changed rather than went away, propose the new line with memory.propose_update too. A rationale is required. The removed text stays in the memory repo's history.",
+			Tier: policy.TierInternal, Kind: policy.Write, Trust: mcpsrv.Trusted,
+			Schema: json.RawMessage(`{"type":"object","properties":{` +
+				`"path":{"type":"string","description":"document path, e.g. taste/food"},` +
+				`"fact_id":{"type":"string","description":"proposal id stamped on the line to remove, e.g. 20261106-0123456789abcdef"},` +
+				`"rationale":{"type":"string","description":"why this line should go; recorded as provenance"}},` +
+				`"required":["path","fact_id","rationale"]}`),
+			Handle: func(ctx context.Context, args map[string]any) (any, error) {
+				if d.Notifier == nil {
+					return nil, fmt.Errorf("memory proposals are disabled: no approver is wired")
+				}
+				store := memory.Store{Root: d.MemoryRoot}
+				p, err := store.StageRemove(str(args["path"]), str(args["fact_id"]), str(args["rationale"]), time.Now())
+				if err != nil {
+					return nil, err
+				}
+				if err := d.Notifier.ProposeMemory(ctx, p); err != nil {
+					if rmErr := store.Remove(p.ID); rmErr != nil {
+						return nil, fmt.Errorf("the approver bot did not receive the proposal: %v; and the staged proposal %s could not be removed: %v", err, p.ID, rmErr)
+					}
+					return nil, fmt.Errorf("the approver bot did not receive the proposal, so nothing was removed: %v. Tell the user their approver bot is not responding.", err)
+				}
+				return map[string]any{"proposal_id": p.ID, "status": "sent for approval", "removes": p.Line}, nil
+			},
+		},
+		{
 			Name: "capabilities",
 			Description: "What this gateway can do right now: caps remaining today, whether the kill switch is on, " +
 				"whether the session is tainted, and every tool's tier. Ask before promising the user something.",

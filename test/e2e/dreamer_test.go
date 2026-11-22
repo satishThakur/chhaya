@@ -209,7 +209,7 @@ func TestDreamerOverRealMTLS(t *testing.T) {
 	}
 	// Tools that do not exist (a merge, a revert, an approval, a write to the tests) cannot be named
 	// at all: the protocol refuses before the gateway is asked.
-	for _, tool := range []string{"memory.merge", "memory.revert", "memory.approve", "memory.write", "memory.put_test", "swiggy.order"} {
+	for _, tool := range []string{"memory.propose_remove", "memory.merge", "memory.revert", "memory.approve", "memory.write", "memory.put_test", "swiggy.order"} {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		res, err := s.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: map[string]any{}})
 		cancel()

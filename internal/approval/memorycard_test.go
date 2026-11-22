@@ -334,6 +334,7 @@ func TestOnlyTheTapHandlerApplies(t *testing.T) {
 		"internal/approval/memorycard.go":   "memoryTap",
 		"internal/memory/memory_test.go":    "", // unit-tests ApplyApproved itself
 		"internal/memory/gitcommit_test.go": "", // unit-tests ApplyApproved's commit step
+		"internal/memory/remove_test.go":    "", // unit-tests the removal apply
 	}
 
 	var parsed int

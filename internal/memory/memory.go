@@ -111,11 +111,15 @@ func ValidateEntry(s string) (string, error) {
 // Proposal is one staged change. Diff exists only so files written before
 // proposals carried an entry can be recognised and set aside.
 type Proposal struct {
-	ID         string `json:"proposal_id"`
-	Path       string `json:"path"`
-	Entry      string `json:"entry,omitempty"`
-	Diff       string `json:"diff,omitempty"`
-	Rationale  string `json:"rationale"`
+	ID        string `json:"proposal_id"`
+	Path      string `json:"path"`
+	Entry     string `json:"entry,omitempty"`
+	Diff      string `json:"diff,omitempty"`
+	Rationale string `json:"rationale"`
+	// Remove and Line make this a removal: Remove is the proposal id stamped on the line to take
+	// out, Line the text the owner was shown (without its stamp). Entry is empty for a removal.
+	Remove     string `json:"remove,omitempty"`
+	Line       string `json:"line,omitempty"`
 	ProposedAt string `json:"proposed_at"`
 	DecidedAt  string `json:"decided_at,omitempty"`
 	Decision   string `json:"decision,omitempty"`
@@ -178,22 +182,27 @@ func (s Store) Stage(path, entry, rationale string, now time.Time) (Proposal, er
 		return Proposal{}, err
 	}
 	p := Proposal{ID: id, Path: path, Entry: entry, Rationale: rationale, ProposedAt: now.UTC().Format(time.RFC3339)}
-	body, err := json.Marshal(p)
-	if err != nil {
-		return Proposal{}, err
-	}
-	if err := mkdir(s.dir()); err != nil {
-		return Proposal{}, err
-	}
-	file := filepath.Join(s.dir(), id+".json")
-	if err := os.WriteFile(file, body, 0o644); err != nil {
-		return Proposal{}, err
-	}
-	// WriteFile honours the umask; the approver may run as another user.
-	if err := os.Chmod(file, 0o644); err != nil {
+	if err := s.write(p); err != nil {
 		return Proposal{}, err
 	}
 	return p, nil
+}
+
+// write files a staged proposal under .proposals.
+func (s Store) write(p Proposal) error {
+	body, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	if err := mkdir(s.dir()); err != nil {
+		return err
+	}
+	file := filepath.Join(s.dir(), p.ID+".json")
+	if err := os.WriteFile(file, body, 0o644); err != nil {
+		return err
+	}
+	// WriteFile honours the umask; the approver may run as another user.
+	return os.Chmod(file, 0o644)
 }
 
 // Load reads one proposal. The id is checked against the generated format
@@ -250,7 +259,7 @@ func (s Store) Pending() (ready []Proposal, legacy []string, skipped []error, er
 			skipped = append(skipped, err)
 			continue
 		}
-		if p.Entry == "" {
+		if p.Entry == "" && p.Remove == "" {
 			legacy = append(legacy, id)
 		} else {
 			ready = append(ready, p)
@@ -289,6 +298,9 @@ func (s Store) ApplyApproved(id string, now time.Time) (Proposal, error) {
 	p, err := s.Load(id)
 	if err != nil {
 		return Proposal{}, err
+	}
+	if p.Remove != "" {
+		return s.applyRemove(id, p, now)
 	}
 	entry, err := ValidateEntry(p.Entry)
 	if err != nil {
