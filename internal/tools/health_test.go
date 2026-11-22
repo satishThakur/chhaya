@@ -67,8 +67,8 @@ func TestHealthToolsAreReadOnlyTierZeroAndTrusted(t *testing.T) {
 			t.Errorf("%s: %d/%v/%q", r.Name, r.Tier, r.Kind, r.Trust)
 		}
 	}
-	if n != 2 {
-		t.Fatalf("%d health tools, want health.get_summary and health.get_series", n)
+	if n != 3 {
+		t.Fatalf("%d health tools, want get_summary, get_series and get_digest", n)
 	}
 }
 

@@ -29,7 +29,7 @@ func TestDreamerMayOnlyReadMemoryAndPropose(t *testing.T) {
 	}
 	// Everything else the gateway has, or ever will have, is refused for this actor, by name.
 	for _, tool := range []string{"capabilities", "ping", "swiggy.order", "claude_worker.run", "garmin.read", "web.fetch",
-		"memory.write", "memory.propose_remove", "health.get_summary", "health.get_series", "memory.merge", "memory.revert", "memory.approve", "memory.delete", "memory.put_test", ""} {
+		"memory.write", "memory.propose_remove", "health.get_summary", "health.get_series", "health.get_digest", "memory.merge", "memory.revert", "memory.approve", "memory.delete", "memory.put_test", ""} {
 		d := Decide(dreq(tool, Read), State{}, cfg, now)
 		if d.Outcome != Deny || d.RuleID != "actor.tool_not_allowed" {
 			t.Errorf("%q must be refused for the dreamer: %+v", tool, d)

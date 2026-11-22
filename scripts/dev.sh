@@ -82,6 +82,7 @@ prepare_hermes_home() {
   chmod 700 "$HERMES_HOME_DIR"
   [ -O "$HERMES_HOME_DIR" ] || die "$HERMES_HOME_DIR is not owned by you — Hermes would run as uid $HERMES_UID against someone else's files"
   touch "$HERMES_HOME_DIR/config.yaml" "$HERMES_HOME_DIR/SOUL.md"
+  install_skills
   # HERMES_WRITE_SAFE_ROOT (docker-compose.yml): the one directory the agent's file
   # tools may write. Created here so it is the operator's, not a root-made mountpoint.
   mkdir -p "$HERMES_HOME_DIR/workspace"
@@ -533,6 +534,33 @@ cmd_backup() {
 # is already pinned right is left alone, and a job named in the file but not yet created is
 # reported, not an error (the agent creates the digest, so a fresh box has none).
 # Reads the job file, writes only through `hermes cron edit`, so Hermes stays the one writer.
+# Skills we author (hermes/skills/<category>/<name>/SKILL.md) are copied into Hermes' own skills
+# directory on every `up`, so a rebuilt box has them. Copy, not mount: Hermes' skills/ also holds
+# its own and the ones it writes (with approval); a mount would hide those.
+install_skills() {
+  local src="$ROOT/hermes/skills" d
+  [ -d "$src" ] || return 0
+  for d in "$src"/*/*/; do
+    [ -f "$d/SKILL.md" ] || continue
+    mkdir -p "$HERMES_HOME_DIR/skills/$(basename "$(dirname "$d")")"
+    rm -rf "$HERMES_HOME_DIR/skills/$(basename "$(dirname "$d")")/$(basename "$d")"
+    cp -r "$d" "$HERMES_HOME_DIR/skills/$(basename "$(dirname "$d")")/$(basename "$d")"
+  done
+}
+
+# health-digest-cron: create the morning health digest as a Hermes cron job if it is not there.
+# 02:30 UTC = 08:00 IST (the box clock is UTC). Delivered to Telegram by Hermes' own bot.
+cmd_health_digest_cron() {
+  local name="Morning Health Digest" have
+  have="$("${COMPOSE[@]}" exec -T hermes hermes cron list 2>/dev/null | grep -c "$name" || true)"
+  if [ "${have:-0}" -gt 0 ]; then grn "exists   $name"; return 0; fi
+  install_skills
+  "${COMPOSE[@]}" exec -T hermes hermes cron create "30 2 * * *" \
+    "Write today's health digest using the health-digest skill and send it as the reply. Follow the skill exactly." \
+    --name "$name" --skill health-digest --deliver telegram >/dev/null || die "hermes cron create failed"
+  grn "created  $name (08:00 IST)"
+}
+
 cmd_cron_models() {
   local want="$ROOT/hermes/cron-models.tsv" check=0 rc=0
   [ "${1:-}" = "--check" ] && check=1
@@ -588,6 +616,7 @@ case "${1:-}" in
   doctor)  cmd_doctor ;;
   backup)  cmd_backup ;;
   cron-models) shift; cmd_cron_models "$@" ;;
+  health-digest-cron) cmd_health_digest_cron ;;
   *) cat >&2 <<'USAGE'
 usage: scripts/dev.sh <command>
 
