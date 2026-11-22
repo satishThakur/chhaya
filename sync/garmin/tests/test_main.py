@@ -38,9 +38,17 @@ class RunOnce(unittest.TestCase):
         self.assertEqual(run["metrics"], 6)  # (1 sleep + 1 stress + 1 steps) per day
 
     def test_a_backfill_fetches_the_older_days_first_and_each_day_once(self):
-        run, post = self.run_it(back=3)
+        run, post = self.run_it(back=3, sleep=lambda s: None)
         self.assertEqual(run["days"], ["2026-11-19", "2026-11-20", "2026-11-21", "2026-11-22"])
         self.assertEqual([b["date"] for p, b in post.calls if p == "/ingest/day"], run["days"])
+
+    def test_a_long_backfill_pauses_between_days_and_a_normal_pass_does_not(self):
+        naps = []
+        self.run_it(back=5, sleep=naps.append)
+        self.assertEqual(naps, [2] * 5)
+        naps.clear()
+        self.run_it(sleep=naps.append)
+        self.assertEqual(naps, [])
 
     def test_a_failed_login_is_reported_not_swallowed_and_never_logs_the_password(self):
         def bad(*a):

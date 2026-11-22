@@ -84,3 +84,17 @@ func TestANameThatCouldEscapeTheReportsFolderIsRefused(t *testing.T) {
 		t.Fatalf("nothing may be uploaded under a bad name: %v", log)
 	}
 }
+
+func TestAnchorHidesTheURLAndEscapesIt(t *testing.T) {
+	got := Anchor("https://b.s3.amazonaws.com/r.html?X-Amz-Date=1&X-Amz-Signature=abc", "open the page")
+	want := `<a href="https://b.s3.amazonaws.com/r.html?X-Amz-Date=1&amp;X-Amz-Signature=abc">open the page</a>`
+	if got != want {
+		t.Fatalf("got %s", got)
+	}
+	if strings.Contains(strings.Replace(got, `href="`+"https://b.s3.amazonaws.com/r.html?X-Amz-Date=1&amp;X-Amz-Signature=abc"+`"`, "", 1), "amazonaws") {
+		t.Fatal("the URL must appear only in the href, not in the visible text")
+	}
+	if a := Anchor("https://x/", `a"<b>`); strings.Contains(a, `"<b>`) || !strings.Contains(a, "&lt;b&gt;") {
+		t.Fatalf("link text must be escaped: %s", a)
+	}
+}

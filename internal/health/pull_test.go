@@ -16,6 +16,7 @@ type fakeS3 struct {
 	inbox  map[string]string
 	moved  map[string]string // name -> processed|rejected
 	failLS bool
+	gone   map[string]bool // objects another pull takes between the listing and the read
 }
 
 func (f *fakeS3) run(name string, args ...string) ([]byte, error) {
@@ -39,6 +40,9 @@ func (f *fakeS3) run(name string, args ...string) ([]byte, error) {
 		}
 		return []byte(strings.Join(keys, "\t") + "\n"), nil
 	case args[1] == "cp":
+		if g := args[len(args)-2]; f.gone[g[strings.LastIndex(g, "/")+1:]] {
+			return nil, fmt.Errorf("aws: exit status 1: download failed: An error occurred (404) when calling the HeadObject operation: Not Found")
+		}
 		n := args[len(args)-2][strings.LastIndex(args[len(args)-2], "/")+1:]
 		return []byte(f.inbox[n]), nil
 	case args[1] == "mv":
@@ -181,5 +185,15 @@ func TestPullListFailureIsAnError(t *testing.T) {
 	f.failLS = true
 	if _, err := puller(f, "http://127.0.0.1:1").Pull(context.Background()); err == nil {
 		t.Fatal("a listing that failed must not read as an empty inbox")
+	}
+}
+
+func TestPullSkipsAnObjectAnotherPullTookFirst(t *testing.T) {
+	f := newFake(map[string]string{"day-2026-11-21-aa.json": "x", "day-2026-11-22-bb.json": "y"})
+	f.gone = map[string]bool{"day-2026-11-21-aa.json": true}
+	ts, seen := gateway(t, func(string, string) (int, string) { return 200, "{}" })
+	r, err := puller(f, ts.URL).Pull(context.Background())
+	if err != nil || r.Ingested != 1 || len(*seen) != 1 {
+		t.Fatalf("a vanished object must be skipped, not fail the pass: %+v %v", r, err)
 	}
 }

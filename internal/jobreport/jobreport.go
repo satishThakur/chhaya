@@ -7,6 +7,7 @@ package jobreport
 import (
 	"context"
 	"fmt"
+	"html"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -69,4 +70,11 @@ func Deliver(ctx context.Context, o Options, name, html string, message func(lin
 		return msg, fmt.Errorf("%s", strings.Join(errs, "; "))
 	}
 	return msg, nil
+}
+
+// Anchor is a Telegram HTML link that shows text and hides the URL. A presigned URL is several
+// hundred characters of signature, so it is never shown raw. The href is escaped (the URL carries
+// & characters).
+func Anchor(link, text string) string {
+	return fmt.Sprintf("<a href=\"%s\">%s</a>", html.EscapeString(link), html.EscapeString(text))
 }

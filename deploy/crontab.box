@@ -66,5 +66,6 @@ CHHAYA_BACKUP_S3=s3://chhaya-backup-803874683069-ap-south-1/backups
 # processed/ or rejected/. Prints nothing when the inbox is empty; a document the gateway refuses is
 # sent to you on Telegram once. Garmin refuses sign-ins from AWS, so the sync runs on the desktop and
 # the box holds no Garmin login. The morning report's "health sync" row shows when the last desktop
-# run arrived. docs/health.md, "Where the sync runs".
-*/15 * * * * cd /home/ubuntu/chhaya && go build -o bin/chhayactl ./cmd/chhayactl && bin/chhayactl health pull -s3 s3://chhaya-backup-803874683069-ap-south-1/health -send >> /home/ubuntu/.chhaya/backups/health-pull.log 2>&1
+# run arrived. flock: a slow pass (a big backfill) is not overlapped by the next one.
+# docs/health.md, "Where the sync runs".
+*/15 * * * * cd /home/ubuntu/chhaya && flock -n /tmp/health-pull.lock sh -c 'go build -o bin/chhayactl ./cmd/chhayactl && bin/chhayactl health pull -s3 s3://chhaya-backup-803874683069-ap-south-1/health -send' >> /home/ubuntu/.chhaya/backups/health-pull.log 2>&1

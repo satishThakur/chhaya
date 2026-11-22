@@ -87,6 +87,9 @@ func (p *Puller) Pull(ctx context.Context) (PullResult, error) {
 		key := p.base() + "/inbox/" + name
 		body, err := p.Run("aws", "s3", "cp", "--only-show-errors", key, "-")
 		if err != nil {
+			if goneFromInbox(err) {
+				continue // another pull (the cron and a manual run) took it between the listing and now
+			}
 			return r, fmt.Errorf("reading %s: %w", name, err)
 		}
 		path := "/ingest/day"
@@ -149,4 +152,10 @@ func splitS3(uri string) (bucket, prefix string, err error) {
 		return "", "", fmt.Errorf("%q is not s3://bucket/prefix", uri)
 	}
 	return b, pre, nil
+}
+
+// goneFromInbox reports whether an aws error means the object no longer exists.
+func goneFromInbox(err error) bool {
+	m := err.Error()
+	return strings.Contains(m, "404") || strings.Contains(m, "NoSuchKey") || strings.Contains(m, "Not Found")
 }

@@ -48,7 +48,7 @@ def count(doc):
     return metrics, len(doc.get("activities", []))
 
 
-def run_once(cfg, now=None, garmin_login=garmin.login, fetch=garmin.fetch, post=ingest.post, dry_run=False, back=1):
+def run_once(cfg, now=None, garmin_login=garmin.login, fetch=garmin.fetch, post=ingest.post, dry_run=False, back=1, sleep=time.sleep):
     if cfg.get("s3_uri") and post is ingest.post and not dry_run:
         post = sink.make(cfg["s3_uri"])
     tz = ZoneInfo(cfg["tz"])
@@ -78,7 +78,9 @@ def run_once(cfg, now=None, garmin_login=garmin.login, fetch=garmin.fetch, post=
         errors.append(f"login: {_short(e)}")
         return finish("failed")
 
-    for date in days:
+    for i, date in enumerate(days):
+        if i and back > 2:
+            sleep(2)  # a long backfill is hundreds of calls; Garmin answers a burst with 429
         doc, errs = build_day(date, fetch(client, date))
         errors += [f"{date} {e}" for e in errs]
         if transform.is_empty(doc):

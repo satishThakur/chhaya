@@ -2,6 +2,7 @@ package dream
 
 import (
 	"fmt"
+	"github.com/satishthakur/chhaya/internal/jobreport"
 	"html/template"
 	"sort"
 	"strings"
@@ -141,7 +142,7 @@ func SummaryMessage(s Summary, propose bool, link, day string, runErr error) str
 		fmt.Fprintf(&b, "stopped: %v\n", runErr)
 	}
 	if link != "" {
-		fmt.Fprintf(&b, "report: %s\n", link)
+		fmt.Fprintf(&b, "report: %s\n", jobreport.Anchor(link, "open the page"))
 	}
 	return b.String()
 }

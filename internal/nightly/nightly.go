@@ -188,7 +188,7 @@ func Message(in Input, link string) string {
 		b.WriteString(in.jobsLine() + "\n")
 	}
 	if link != "" {
-		fmt.Fprintf(&b, "report: %s\n", link)
+		fmt.Fprintf(&b, "report: %s\n", jobreport.Anchor(link, "open the page"))
 	}
 	return b.String()
 }
