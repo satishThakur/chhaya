@@ -55,6 +55,50 @@ func healthTools(d Deps) []mcpsrv.Registration {
 			},
 		},
 		{
+			Name: "health.get_digest",
+			Description: "The owner's health for one day set against their own previous 30 days, already worked out: for sleep, HRV, resting heart rate, " +
+				"stress and body battery, the value, the owner's usual (mean and spread), whether it is typical, notable or marked, above or below, " +
+				"and whether that direction is better or worse; the 7-day trend; the notable findings in order; metrics with no value; workout load; " +
+				"and how fresh the data is. Quote these figures, in their display form; never recompute or compare them yourself. " +
+				"Nothing is judged without 14 days of history, and part-day figures are not judged on today. " +
+				"date is YYYY-MM-DD, default today (or the newest day with data, which the note says). This is fitness and recovery information, not medical advice.",
+			Tier: policy.TierInternal, Kind: policy.Read, Trust: mcpsrv.Trusted,
+			Schema: json.RawMessage(`{"type":"object","properties":{"date":{"type":"string","description":"YYYY-MM-DD, default today"}}}`),
+			Handle: func(ctx context.Context, args map[string]any) (any, error) {
+				date := str(args["date"])
+				at := now()
+				today := at.In(loc)
+				if date != "" {
+					t, err := time.ParseInLocation("2006-01-02", date, loc)
+					if err != nil {
+						return nil, fmt.Errorf("date must be YYYY-MM-DD")
+					}
+					if t.After(today) || t.Before(today.AddDate(-1, 0, 0)) {
+						return nil, fmt.Errorf("date must be within the last year and not in the future")
+					}
+				}
+				anchor := today
+				if date != "" {
+					anchor, _ = time.ParseInLocation("2006-01-02", date, loc)
+				}
+				from := time.Date(anchor.Year(), anchor.Month(), anchor.Day()-health.DigestWindowBack, 0, 0, 0, 0, loc).UTC()
+				to := time.Date(today.Year(), today.Month(), today.Day()+2, 0, 0, 0, 0, loc).UTC()
+				ms, err := d.Health.Range(ctx, from, to)
+				if err != nil {
+					return nil, fmt.Errorf("could not read health data: %w", err)
+				}
+				acts, err := d.Health.ActivitiesIn(ctx, from, to)
+				if err != nil {
+					return nil, fmt.Errorf("could not read workouts: %w", err)
+				}
+				run, err := d.Health.LastRun(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("could not read the last sync: %w", err)
+				}
+				return health.BuildDigest(ms, acts, run, date, loc, at), nil
+			},
+		},
+		{
 			Name: "health.get_series",
 			Description: "One health metric day by day (or week by week) for the last N days, oldest first, so you can describe a pattern or find a specific day. " +
 				"metric is one of: " + strings.Join(health.MetricNames(), ", ") + ". days is 1 to 365 (default 30). " +

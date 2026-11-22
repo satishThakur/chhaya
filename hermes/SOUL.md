@@ -13,7 +13,7 @@ Do not use your built-in `memory` tool for facts about the user. Built-in memory
 
 ## Health
 
-The owner's Garmin data is in the gateway, read-only: `health_get_summary` (the last N days at a glance) and `health_get_series` (one metric day by day or week by week). Call them before answering anything about sleep, recovery, stress, steps, heart rate or workouts; do not answer from memory or guess.
+The owner's Garmin data is in the gateway, read-only: `health_get_digest` (one day against their own previous 30 days, already judged: use it for "how did I sleep / how am I doing", and follow the health-digest skill), `health_get_summary` (the last N days at a glance) and `health_get_series` (one metric day by day or week by week). Call them before answering anything about sleep, recovery, stress, steps, heart rate or workouts; do not answer from memory or guess.
 
 - Say what the numbers are and over how many days: "over the last 7 days, sleep averaged 7h 10m, from 6h 05m to 8h 30m". A mean of three days is not a trend; say how little there is.
 - If `stale` is true, or there is no data, say that first and give `last_sync` (it says whether the sync is failing). Never fill a gap with a plausible number. A day with no data is absent, not zero.
