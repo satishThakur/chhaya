@@ -931,3 +931,13 @@ second user or inbound access, or the bot naming convention stops being enforcea
 ## 2026-11-22: the health database is a host bind mount; the sync window is fixed
 
 TimescaleDB's data is `~/.chhaya/health/pgdata` on the host (bind mount), not a named volume, so it survives `down -v` and image changes and sits on the box's disk like the rest. The files are owned by the image's postgres uid; the backup reads the database through the nightly `pg_dump`, not the files. The sync fetches yesterday and today each pass and relies on upsert for idempotence; `--days N` backfills. The sync image failed to build (the base image already has a `sync` user) and was fixed before the first deploy.
+
+## 2026-11-22: the Garmin sync runs on the desktop and hands over through S3
+
+**Evidence.** From the EC2 box the Garmin password was accepted but the token exchange (`connectapi.garmin.com/oauth-service/oauth/preauthorized`) answered 429 on the very first attempt, twice, and logging out of the browser changed nothing. From the desktop's home address the same login worked first time. So Garmin refuses AWS addresses (an inference from that pattern; not documented by Garmin).
+
+**Decision.** The sync container runs on the desktop only. It writes the same day and run documents it used to post to `s3://BUCKET/health/inbox/`; a box cron (`chhayactl health pull`, every 15 min) posts each to the gateway's ingest on the host loopback, where the unchanged strict decoder validates it, and files it under `processed/` or `rejected/`. The box holds no Garmin login. The desktop's key is a put-only IAM user on `health/inbox/*`. The ingest port is now published on `127.0.0.1:8444` for the cron (Hermes cannot reach the host loopback; the secret still applies).
+
+**Kept as a fallback, not a plan A:** copying the desktop's Garmin tokens to the box (the token refresh calls the same blocked host). **Open:** intervals.icu as the source instead of Garmin (checking which fields it carries); if it covers what we use, the pull job would poll its API and this sidecar becomes the backup.
+
+**Costs.** No data while the desktop is off; the staleness text and the morning report show it. One more cron line and one IAM user.

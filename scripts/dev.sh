@@ -137,13 +137,17 @@ load_health_env() {
   export CHHAYA_HEALTH_INGEST_SECRET="$(env_val "$HEALTH_ENV" CHHAYA_HEALTH_INGEST_SECRET)"
   export GARMIN_EMAIL="$(env_val "$HEALTH_ENV" GARMIN_EMAIL)"
   export GARMIN_PASSWORD="$(env_val "$HEALTH_ENV" GARMIN_PASSWORD)"
+  export HEALTH_S3_URI="$(env_val "$HEALTH_ENV" HEALTH_S3_URI)"
+  export HEALTH_AWS_ACCESS_KEY_ID="$(env_val "$HEALTH_ENV" HEALTH_AWS_ACCESS_KEY_ID)"
+  export HEALTH_AWS_SECRET_ACCESS_KEY="$(env_val "$HEALTH_ENV" HEALTH_AWS_SECRET_ACCESS_KEY)"
   local tz sync
   tz="$(env_val "$HEALTH_ENV" CHHAYA_HEALTH_TZ)"; [ -z "$tz" ] || export CHHAYA_HEALTH_TZ="$tz"
   sync="$(env_val "$HEALTH_ENV" SYNC_EVERY_MINUTES)"; [ -z "$sync" ] || export SYNC_EVERY_MINUTES="$sync"
   export CHHAYA_HEALTH_HOME="$HEALTH_HOME_DIR"
   # Generated values are hex, so they need no URL-encoding in the connection string.
   export CHHAYA_HEALTH_DB_URL="postgres://chhaya:${HEALTH_DB_PASSWORD}@timescaledb:5432/chhaya_health?sslmode=disable"
-  export COMPOSE_PROFILES=health
+  # The sync container runs only where there is a Garmin login (the desktop). The box has none.
+  if [ -n "$GARMIN_EMAIL" ]; then export COMPOSE_PROFILES=health,garmin; else export COMPOSE_PROFILES=health; fi
 }
 
 prepare_health() {
@@ -152,11 +156,32 @@ prepare_health() {
   chmod 700 "$HEALTH_HOME_DIR" "$HEALTH_HOME_DIR/garmin"
   [ -O "$HEALTH_HOME_DIR" ] || die "$HEALTH_HOME_DIR is not owned by you"
   local k
-  for k in HEALTH_DB_PASSWORD CHHAYA_HEALTH_INGEST_SECRET GARMIN_EMAIL GARMIN_PASSWORD; do
-    has_key "$HEALTH_ENV" "$k" || die "deploy/.env.health: $k is empty (run: scripts/dev.sh health-init, then fill the Garmin login)"
+  for k in HEALTH_DB_PASSWORD CHHAYA_HEALTH_INGEST_SECRET; do
+    has_key "$HEALTH_ENV" "$k" || die "deploy/.env.health: $k is empty (run: scripts/dev.sh health-init)"
   done
+  # The Garmin login is optional here (the box has none), but half of one is a mistake, and the S3
+  # mode needs its keys.
+  if has_key "$HEALTH_ENV" GARMIN_EMAIL || has_key "$HEALTH_ENV" GARMIN_PASSWORD; then
+    for k in GARMIN_EMAIL GARMIN_PASSWORD; do
+      has_key "$HEALTH_ENV" "$k" || die "deploy/.env.health: $k is empty but the other half of the Garmin login is set"
+    done
+  fi
+  if has_key "$HEALTH_ENV" HEALTH_S3_URI; then
+    for k in HEALTH_AWS_ACCESS_KEY_ID HEALTH_AWS_SECRET_ACCESS_KEY; do
+      has_key "$HEALTH_ENV" "$k" || die "deploy/.env.health: HEALTH_S3_URI is set but $k is empty"
+    done
+  fi
   case "$(env_val "$HEALTH_ENV" HEALTH_DB_PASSWORD)" in *[!0-9a-f]*) die "deploy/.env.health: HEALTH_DB_PASSWORD must be hex (it goes into a URL); regenerate with health-init";; esac
 }
+
+# The sync alone, without Hermes or the gateway: what the desktop runs all day.
+cmd_sync_up() {
+  health_enabled || die "no deploy/.env.health (run: scripts/dev.sh health-init)"
+  [ -n "$GARMIN_EMAIL" ] || die "deploy/.env.health has no Garmin login"
+  prepare_health
+  "${COMPOSE[@]}" up -d --build --no-deps garmin-sync
+}
+cmd_sync_down() { "${COMPOSE[@]}" stop garmin-sync; }
 
 # health-init: create deploy/.env.health with fresh generated secrets. Never overwrites.
 cmd_health_init() {
@@ -167,7 +192,7 @@ cmd_health_init() {
       -e "s/^CHHAYA_HEALTH_INGEST_SECRET=.*/CHHAYA_HEALTH_INGEST_SECRET=$(openssl rand -hex 24)/" \
       "$DEPLOY/.env.health.example" > "$HEALTH_ENV"
   grn "wrote deploy/.env.health with generated secrets"
-  echo "now put your Garmin login in it: GARMIN_EMAIL= and GARMIN_PASSWORD="
+  echo "on the desktop (the machine Garmin accepts), put the Garmin login and the S3 settings in it; on the box leave them empty"
 }
 
 preflight() {
@@ -189,7 +214,7 @@ preflight() {
     fail=1
   fi
   local hk
-  for hk in CHHAYA_HEALTH_INGEST_SECRET GARMIN_PASSWORD HEALTH_DB_PASSWORD; do
+  for hk in CHHAYA_HEALTH_INGEST_SECRET GARMIN_PASSWORD HEALTH_DB_PASSWORD HEALTH_AWS_SECRET_ACCESS_KEY; do
     if mentions "$DEPLOY/.env.hermes" "$hk"; then
       red "deploy/.env.hermes mentions $hk. The health secrets belong in deploy/.env.health only:"
       red "if Hermes held the ingest secret, the agent could write its own health data."
@@ -557,6 +582,8 @@ case "${1:-}" in
   health-init) cmd_health_init ;;
   health-dump) health_dump && grn "dumped to ${HEALTH_DUMP/#$HOME/~}" ;;
   health-restore) shift; cmd_health_restore "$@" ;;
+  health-sync-up)   cmd_sync_up ;;
+  health-sync-down) cmd_sync_down ;;
   compose) shift; "${COMPOSE[@]}" "$@" ;;
   doctor)  cmd_doctor ;;
   backup)  cmd_backup ;;
@@ -571,6 +598,8 @@ usage: scripts/dev.sh <command>
   compose ARGS...  docker compose with this stack's environment (e.g. compose logs timescaledb)
   health-init  create deploy/.env.health with generated secrets (turns the health module on)
   health-dump  write a dump of the health database now (the backup does this itself)
+  health-sync-up    start ONLY the Garmin sync (desktop): writes to S3 when HEALTH_S3_URI is set
+  health-sync-down  stop it
   health-restore [FILE]  load a health dump into a fresh database (default: the one in the backup)
   up        preflight, render Hermes' config, build and start both containers
   down      stop both containers

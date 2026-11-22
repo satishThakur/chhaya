@@ -79,6 +79,23 @@ resource "aws_s3_bucket_lifecycle_configuration" "backup" {
     }
   }
 
+  # Health documents the box has ingested are only a re-ingest source (the database is the record
+  # and is backed up), so they go after two weeks. inbox/ and rejected/ are never expired: a document
+  # still in the inbox has not been ingested, and a rejected one is evidence of a bug.
+  rule {
+    id     = "expire-ingested-health-documents"
+    status = "Enabled"
+    filter {
+      prefix = "health/processed/"
+    }
+    expiration {
+      days = 14
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 7
+    }
+  }
+
   dynamic "rule" {
     for_each = toset(local.expiring_prefixes)
     content {

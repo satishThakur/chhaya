@@ -92,11 +92,41 @@ Tests: `make test` runs everything that needs no database, including the Python-
 - HRV status ("balanced") and sleep stages over the night; both need a non-numeric or finer-grained store.
 - Reading health data back into the trace checks (a check that an answer's numbers appear in the tool output).
 
+## Where the sync runs: the desktop, through S3
+
+Garmin refuses sign-ins from AWS addresses: from the box the password was accepted and the token
+step answered HTTP 429 on the very first attempt; the same login from a home address worked first
+time (2026-11-22). So the sync runs on the desktop and the box never talks to Garmin.
+
+```
+desktop: garmin-sync  --(put-only key)-->  s3://BUCKET/health/inbox/{day-DATE-HASH,run-TS-HASH}.json
+box:     cron every 15 min: chhayactl health pull  -->  gateway 127.0.0.1:8444 (strict decoder)
+                                                   -->  files under health/processed/ or health/rejected/
+```
+
+- **Desktop:** `deploy/.env.health` holds the Garmin login, `HEALTH_S3_URI=s3://BUCKET/health/inbox` and a
+  put-only key (`HEALTH_AWS_ACCESS_KEY_ID`/`SECRET`). `scripts/dev.sh health-sync-up` starts just the
+  sync (`restart: unless-stopped`, so it survives reboots); `health-sync-down` stops it.
+- **Box:** no Garmin login, no sync container. `deploy/crontab.box` has the pull line. The gateway publishes
+  its ingest on the box's loopback only (`127.0.0.1:8444`): Hermes cannot reach it, the shared secret
+  still guards it.
+- **The key** is created by hand, not by Terraform (a key made there sits in the state file):
+  `aws iam create-access-key --user-name chhaya-health-uploader`. The user may only `PutObject` under
+  `health/inbox/`: it cannot read health data, list the bucket or touch backups and traces.
+- **A refused document** (the decoder says why) is moved to `rejected/` and sent to you once on Telegram.
+  A gateway that is down, or a wrong secret, leaves everything in `inbox/` and the next pass retries.
+  `processed/` expires after 14 days; `inbox/` and `rejected/` never do.
+- **Desktop off:** nothing arrives, the sync row in the morning report ages, and `health.get_summary`
+  already says the data is stale. Each pass fetches today and the two days before it, so a gap of up to
+  two days heals itself; for longer, `--once --days N`.
+- **Why not post straight to the box?** That needs the ingest port open to the internet or a tunnel. S3
+  is already the exchange for traces and backups, with its own access control.
+
 ## Sync: when it runs, idempotence, backfill
 
-The sync is a loop in the `garmin-sync` container: every `SYNC_EVERY_MINUTES` (default 180) it signs in (reusing the saved token), fetches **yesterday and today** from Garmin, posts each day, then posts a run record. It is not a delta from a stored cursor: the window is fixed and the gateway upserts by (day, metric), so re-posting a day replaces it and any run is safe to repeat. Yesterday is refetched because Garmin finishes sleep and body battery after midnight.
+The sync is a loop in the `garmin-sync` container: every `SYNC_EVERY_MINUTES` (default 180) it signs in (reusing the saved token), fetches **today and the two days before it** from Garmin, posts each day, then posts a run record. It is not a delta from a stored cursor: the window is fixed and the gateway upserts by (day, metric), so re-posting a day replaces it and any run is safe to repeat. Yesterday is refetched because Garmin finishes sleep and body battery after midnight.
 
-- Run it now: `scripts/dev.sh compose run --rm garmin-sync python -m garmin_sync.main --once`
+- Run it now (on the desktop): `scripts/dev.sh compose run --rm garmin-sync python -m garmin_sync.main --once`
 - Look first, post nothing: add `--dry-run`.
 - Backfill history once: `... --once --days 30` (up to 365; older days first). Garmin rate-limits, so do big backfills in chunks.
-- There is no HTTP trigger: the ingest port only accepts data, and the sidecar holds the Garmin login, so "start a sync" is a command on the box, not an API.
+- There is no HTTP trigger: the ingest port only accepts data, and the sidecar holds the Garmin login, so "start a sync" is a command on the desktop (`health-sync-up`, or the `--once` line above), not an API.
