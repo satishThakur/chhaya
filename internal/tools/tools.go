@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/satishthakur/chhaya/internal/health"
 	"github.com/satishthakur/chhaya/internal/mcpsrv"
 	"github.com/satishthakur/chhaya/internal/memory"
 	"github.com/satishthakur/chhaya/internal/policy"
@@ -28,6 +29,12 @@ type Deps struct {
 	Config     policy.Config
 	// Notifier posts memory proposals to the approver. Nil fails closed.
 	Notifier MemoryNotifier
+	// Health, when set, adds the health.* read tools. Nil means the health module is not
+	// configured and its tools do not exist.
+	Health    health.Reader
+	HealthLoc *time.Location
+	// Now is the clock the health tools use; nil means time.Now.
+	Now func() time.Time
 	// Describe returns tool metadata for capabilities(). It is a function
 	// because capabilities needs the list All() is in the middle of building.
 	Describe func() []mcpsrv.Registration
@@ -36,6 +43,14 @@ type Deps struct {
 const objectSchema = `{"type":"object"}`
 
 func All(d Deps) []mcpsrv.Registration {
+	regs := base(d)
+	if d.Health != nil {
+		regs = append(regs, healthTools(d)...)
+	}
+	return regs
+}
+
+func base(d Deps) []mcpsrv.Registration {
 	return []mcpsrv.Registration{
 		{
 			Name:        "ping",

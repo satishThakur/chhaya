@@ -1,0 +1,2 @@
+garminconnect==0.2.38
+tzdata==2024.2

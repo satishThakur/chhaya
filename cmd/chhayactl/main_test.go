@@ -800,3 +800,50 @@ func TestTraceExportRecordsItselfOnlyWhenItUploaded(t *testing.T) {
 		t.Fatalf("%+v %v", st, err)
 	}
 }
+
+func TestReportWatchesTheHealthSyncOnlyWhereTheModuleIsOn(t *testing.T) {
+	day := time.Date(2026, 11, 22, 2, 0, 0, 0, time.UTC)
+	evals, mem, jhome := t.TempDir(), t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(mem, "i.md"), []byte("# I\n\n- Loves books. <!-- proposal 20261106-3f609264ada59fd2, approved 2026-11-06 -->\n"), 0o644)
+	rj := filepath.Join(t.TempDir(), "memrun.json")
+	nightly.WriteRunFile(rj, nightly.RunFile{RanAt: day.Add(-5 * time.Hour), Model: "m"})
+	for _, f := range []string{backupStamp, exportStamp, dreamStamp} {
+		must(t, jobreport.WriteStamp(stampPath(jhome, f), jobreport.Stamp{Time: day.Add(-5 * time.Hour), Detail: "d"}))
+	}
+	d := reportDeps{now: func() time.Time { return day }, run: func(string, ...string) ([]byte, error) { return nil, errors.New("no aws") },
+		sender: func(string, int64) nightly.Sender { return &nightSender{} }}
+	base := []string{"nightly", "-dir", evals, "-memory", mem, "-home", jhome, "-run-json", rj}
+	var out bytes.Buffer
+
+	// module off (no env file): no health row, and the night is clean
+	if err := runReport(append(base, "-health-env", filepath.Join(t.TempDir(), "absent")), &out, d); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "health sync") || strings.Contains(out.String(), "FAILED") {
+		t.Fatalf("a box without the module must not fail for it:\n%s", out.String())
+	}
+
+	// module on, the gateway has not recorded a run: FAILED, by name
+	envf := filepath.Join(t.TempDir(), ".env.health")
+	os.WriteFile(envf, []byte("X=1\n"), 0o600)
+	out.Reset()
+	if err := runReport(append(base, "-health-env", envf), &out, d); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "health sync FAILED") {
+		t.Fatalf("no record of the sync must fail the night:\n%s", out.String())
+	}
+
+	// the gateway recorded a good run, then a failed one
+	must(t, jobreport.WriteStamp(filepath.Join(jhome, "gateway", "health-sync.json"), jobreport.Stamp{Time: day.Add(-time.Hour), Detail: "40 metrics"}))
+	out.Reset()
+	if err := runReport(append(base, "-health-env", envf), &out, d); err != nil || !strings.Contains(out.String(), "health sync ok") {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	must(t, jobreport.WriteStamp(filepath.Join(jhome, "gateway", "health-sync.json"), jobreport.Stamp{Time: day.Add(-30 * time.Minute), Failed: "failed: login: 401"}))
+	out.Reset()
+	runReport(append(base, "-health-env", envf), &out, d)
+	if !strings.Contains(out.String(), "health sync FAILED") || !strings.Contains(out.String(), "login: 401") {
+		t.Fatalf("a failed run must fail the night and say why:\n%s", out.String())
+	}
+}

@@ -29,7 +29,7 @@ func TestDreamerMayOnlyReadMemoryAndPropose(t *testing.T) {
 	}
 	// Everything else the gateway has, or ever will have, is refused for this actor, by name.
 	for _, tool := range []string{"capabilities", "ping", "swiggy.order", "claude_worker.run", "garmin.read", "web.fetch",
-		"memory.write", "memory.propose_remove", "memory.merge", "memory.revert", "memory.approve", "memory.delete", "memory.put_test", ""} {
+		"memory.write", "memory.propose_remove", "health.get_summary", "health.get_series", "memory.merge", "memory.revert", "memory.approve", "memory.delete", "memory.put_test", ""} {
 		d := Decide(dreq(tool, Read), State{}, cfg, now)
 		if d.Outcome != Deny || d.RuleID != "actor.tool_not_allowed" {
 			t.Errorf("%q must be refused for the dreamer: %+v", tool, d)
@@ -131,7 +131,7 @@ func TestTheApproverMayOnlyApplyAMemoryLine(t *testing.T) {
 	if d := Decide(r, State{}, baseCfg(), now); d.Outcome != Allow {
 		t.Fatalf("%+v", d)
 	}
-	for _, tool := range []string{"memory.get", "memory.propose_update", "memory.propose_remove", "capabilities", "swiggy.order", "memory.merge"} {
+	for _, tool := range []string{"memory.get", "memory.propose_update", "memory.propose_remove", "health.get_summary", "capabilities", "swiggy.order", "memory.merge"} {
 		r := req(tool, TierInternal, Write)
 		r.Actor = ActorApprover
 		if d := Decide(r, State{}, baseCfg(), now); d.Outcome != Deny || d.RuleID != "actor.tool_not_allowed" {

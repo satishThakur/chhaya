@@ -1,5 +1,7 @@
 # M1 reuse inventory: `health-assistant`
 
+> **Superseded 2026-11-22 by `docs/health.md`**, which records what was actually built and the defects found by reading the sidecar line by line (more than the five below: HRV could never ingest, activity times and body-battery fields were read wrongly, and fetch errors were swallowed). The "currently broken" claim in the next sections was confirmed from the code: at HEAD the sidecar sends no ingest secret.
+
 `~/codebase/health-assistant` is a working personal health app of ours — a Go backend, a
 Flutter client, and a Python Garmin sidecar — built between January and March 2026. It
 already runs the architecture M1 needs, so M1 is largely a port rather than a build.

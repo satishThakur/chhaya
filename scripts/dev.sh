@@ -117,6 +117,59 @@ snapshot_memory() {
   grn "memory snapshot committed in ${m/#$HOME/~}"
 }
 
+# --- the health module (docs/health.md) -------------------------------------------------
+# On when deploy/.env.health exists. Its values are read key by key, never sourced, and exported
+# for docker-compose.yml to interpolate; the GARMIN_* pair reaches only the sync container and
+# the ingest secret only the gateway and the sync (see the environment lists there).
+HEALTH_ENV="$DEPLOY/.env.health"
+HEALTH_HOME_DIR="${CHHAYA_HEALTH_HOME:-$HOME/.chhaya/health}"
+
+env_val() { { grep -E "^${2}=" "$1" 2>/dev/null || true; } | head -n1 | cut -d= -f2-; }
+
+health_enabled() { [ -f "$HEALTH_ENV" ]; }
+
+# load_health_env exports what docker-compose.yml interpolates. Every verb runs it (see the bottom
+# of this file): without COMPOSE_PROFILES=health, `down` would leave the health containers running
+# and `status` would not list them. It checks nothing; prepare_health does, for `up`.
+load_health_env() {
+  health_enabled || return 0
+  export HEALTH_DB_PASSWORD="$(env_val "$HEALTH_ENV" HEALTH_DB_PASSWORD)"
+  export CHHAYA_HEALTH_INGEST_SECRET="$(env_val "$HEALTH_ENV" CHHAYA_HEALTH_INGEST_SECRET)"
+  export GARMIN_EMAIL="$(env_val "$HEALTH_ENV" GARMIN_EMAIL)"
+  export GARMIN_PASSWORD="$(env_val "$HEALTH_ENV" GARMIN_PASSWORD)"
+  local tz sync
+  tz="$(env_val "$HEALTH_ENV" CHHAYA_HEALTH_TZ)"; [ -z "$tz" ] || export CHHAYA_HEALTH_TZ="$tz"
+  sync="$(env_val "$HEALTH_ENV" SYNC_EVERY_MINUTES)"; [ -z "$sync" ] || export SYNC_EVERY_MINUTES="$sync"
+  export CHHAYA_HEALTH_HOME="$HEALTH_HOME_DIR"
+  # Generated values are hex, so they need no URL-encoding in the connection string.
+  export CHHAYA_HEALTH_DB_URL="postgres://chhaya:${HEALTH_DB_PASSWORD}@timescaledb:5432/chhaya_health?sslmode=disable"
+  export COMPOSE_PROFILES=health
+}
+
+prepare_health() {
+  health_enabled || return 0
+  mkdir -p "$HEALTH_HOME_DIR/garmin"
+  chmod 700 "$HEALTH_HOME_DIR" "$HEALTH_HOME_DIR/garmin"
+  [ -O "$HEALTH_HOME_DIR" ] || die "$HEALTH_HOME_DIR is not owned by you"
+  local k
+  for k in HEALTH_DB_PASSWORD CHHAYA_HEALTH_INGEST_SECRET GARMIN_EMAIL GARMIN_PASSWORD; do
+    has_key "$HEALTH_ENV" "$k" || die "deploy/.env.health: $k is empty (run: scripts/dev.sh health-init, then fill the Garmin login)"
+  done
+  case "$(env_val "$HEALTH_ENV" HEALTH_DB_PASSWORD)" in *[!0-9a-f]*) die "deploy/.env.health: HEALTH_DB_PASSWORD must be hex (it goes into a URL); regenerate with health-init";; esac
+}
+
+# health-init: create deploy/.env.health with fresh generated secrets. Never overwrites.
+cmd_health_init() {
+  [ ! -f "$HEALTH_ENV" ] || die "$HEALTH_ENV already exists; edit it, or delete it to regenerate"
+  command -v openssl >/dev/null || die "openssl is needed to generate the secrets"
+  umask 077
+  sed -e "s/^HEALTH_DB_PASSWORD=.*/HEALTH_DB_PASSWORD=$(openssl rand -hex 24)/" \
+      -e "s/^CHHAYA_HEALTH_INGEST_SECRET=.*/CHHAYA_HEALTH_INGEST_SECRET=$(openssl rand -hex 24)/" \
+      "$DEPLOY/.env.health.example" > "$HEALTH_ENV"
+  grn "wrote deploy/.env.health with generated secrets"
+  echo "now put your Garmin login in it: GARMIN_EMAIL= and GARMIN_PASSWORD="
+}
+
 preflight() {
   local fail=0
 
@@ -135,6 +188,14 @@ preflight() {
     red "and press its own kill switch. Remove it."
     fail=1
   fi
+  local hk
+  for hk in CHHAYA_HEALTH_INGEST_SECRET GARMIN_PASSWORD HEALTH_DB_PASSWORD; do
+    if mentions "$DEPLOY/.env.hermes" "$hk"; then
+      red "deploy/.env.hermes mentions $hk. The health secrets belong in deploy/.env.health only:"
+      red "if Hermes held the ingest secret, the agent could write its own health data."
+      fail=1
+    fi
+  done
   if mentions "$DEPLOY/.env.gateway" TELEGRAM_BOT_TOKEN; then
     red "deploy/.env.gateway mentions TELEGRAM_BOT_TOKEN — that belongs to Hermes only."
     red "chhayad would refuse to start anyway; fixing it here saves the restart loop."
@@ -320,6 +381,7 @@ ensure_plugins() {
 cmd_up() {
   prepare_hermes_home
   prepare_gateway_home
+  prepare_health
   preflight || die "preflight failed — nothing was started"
   render_config
   build_ca_bundle
@@ -383,14 +445,52 @@ cmd_verify() { "${COMPOSE[@]}" exec -T gateway chhayactl -data /data audit verif
 # library in our code; restarts it before the slow upload. The restart is trapped so a
 # failed backup can never leave the stack down. Only restarts what was running.
 # Needs CHHAYA_BACKUP_S3=s3://bucket/prefix. docs/decisions.md, 2026-11-09.
+# A logical dump of the health database, written into the gateway's data directory so the same
+# tarball carries it (the database itself is a Docker volume the tarball cannot see). Custom
+# format, written to a temp file and renamed, so a failed dump never replaces the last good one.
+# Needs the database running, so cmd_backup calls it before stopping the stack.
+HEALTH_DUMP="$GATEWAY_HOME_DIR/health.dump"
+health_dump() {
+  health_enabled || return 0
+  local tmp="$HEALTH_DUMP.tmp"
+  ( umask 077; "${COMPOSE[@]}" exec -T timescaledb pg_dump -U chhaya -Fc chhaya_health > "$tmp" ) \
+    || { rm -f "$tmp"; return 1; }
+  [ -s "$tmp" ] || { rm -f "$tmp"; return 1; }
+  mv "$tmp" "$HEALTH_DUMP"
+}
+
+# health-restore [FILE]: load a dump into an EMPTY database. TimescaleDB's own procedure: create
+# the extension, timescaledb_pre_restore(), pg_restore, timescaledb_post_restore(). The gateway and
+# the sync are stopped meanwhile, and the old database is dropped first, so this replaces what is
+# there: it asks for the word RESTORE.
+cmd_health_restore() {
+  local f="${1:-$HEALTH_DUMP}"
+  health_enabled || die "the health module is not enabled (no deploy/.env.health)"
+  [ -s "$f" ] || die "no dump at $f"
+  printf 'This DROPS the health database and loads %s. Type RESTORE to go on: ' "$f"
+  local ans; read -r ans; [ "$ans" = RESTORE ] || die "not restored"
+  "${COMPOSE[@]}" stop gateway garmin-sync
+  local psql=("${COMPOSE[@]}" exec -T timescaledb psql -v ON_ERROR_STOP=1 -U chhaya)
+  "${psql[@]}" -d postgres -c 'DROP DATABASE IF EXISTS chhaya_health WITH (FORCE)' -c 'CREATE DATABASE chhaya_health'
+  "${psql[@]}" -d chhaya_health -c 'CREATE EXTENSION IF NOT EXISTS timescaledb' -c 'SELECT timescaledb_pre_restore()'
+  "${COMPOSE[@]}" exec -T timescaledb pg_restore -U chhaya -d chhaya_health --no-owner < "$f" \
+    || die "pg_restore failed; the database is half-loaded, restore again"
+  "${psql[@]}" -d chhaya_health -c 'SELECT timescaledb_post_restore()'
+  "${COMPOSE[@]}" start gateway garmin-sync
+  grn "health database restored from $f"
+}
+
 cmd_backup() {
   [ -n "${CHHAYA_BACKUP_S3:-}" ] || die "set CHHAYA_BACKUP_S3=s3://bucket/prefix"
   (cd "$ROOT" && go build -o bin/chhayactl ./cmd/chhayactl) || die "could not build chhayactl"
   local ctl="$ROOT/bin/chhayactl" was_up=0 archive
   [ -n "$("${COMPOSE[@]}" ps --status running -q 2>/dev/null)" ] && was_up=1
   if [ "$was_up" -eq 1 ]; then
+    health_dump || die "the health database could not be dumped; nothing was stopped and no backup was taken"
     trap '"${COMPOSE[@]}" start' EXIT
     "${COMPOSE[@]}" stop
+  elif health_enabled; then
+    ylw "the stack is down, so the health database was not dumped: the backup carries the previous dump"
   fi
   archive="$("$ctl" backup create)" || die "backup create failed; the stack is being restarted"
   if [ "$was_up" -eq 1 ]; then
@@ -442,6 +542,7 @@ for j in (d.get("jobs", d) if isinstance(d, dict) else d):
 
 cmd_doctor() { preflight && grn "ready to start"; }
 
+load_health_env
 case "${1:-}" in
   up)      cmd_up ;;
   down)    cmd_down ;;
@@ -453,6 +554,10 @@ case "${1:-}" in
   stop)    cmd_stop ;;
   resume)  cmd_resume ;;
   certs)   cmd_certs ;;
+  health-init) cmd_health_init ;;
+  health-dump) health_dump && grn "dumped to ${HEALTH_DUMP/#$HOME/~}" ;;
+  health-restore) shift; cmd_health_restore "$@" ;;
+  compose) shift; "${COMPOSE[@]}" "$@" ;;
   doctor)  cmd_doctor ;;
   backup)  cmd_backup ;;
   cron-models) shift; cmd_cron_models "$@" ;;
@@ -463,6 +568,10 @@ usage: scripts/dev.sh <command>
   cron-models [--check]  pin cron jobs to the models in hermes/cron-models.tsv
   doctor    check env files, tokens, certs — changes nothing
   certs     generate the CA and both certificates (once)
+  compose ARGS...  docker compose with this stack's environment (e.g. compose logs timescaledb)
+  health-init  create deploy/.env.health with generated secrets (turns the health module on)
+  health-dump  write a dump of the health database now (the backup does this itself)
+  health-restore [FILE]  load a health dump into a fresh database (default: the one in the backup)
   up        preflight, render Hermes' config, build and start both containers
   down      stop both containers
   restart   down then up

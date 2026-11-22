@@ -58,6 +58,7 @@ func runReport(args []string, out io.Writer, d reportDeps) error {
 	s3 := fs.String("s3", "", "s3://bucket/evals prefix (traces are read from it; the report is written to it)")
 	dir := fs.String("dir", evalsDir(), "local evals directory when -s3 is not set")
 	mem := fs.String("memory", defaultMemoryDir(), "the memory root")
+	healthEnv := fs.String("health-env", "deploy/.env.health", "if this file exists the health module is on and its sync is checked too")
 	home := fs.String("home", defaultHome(), "the .chhaya directory (the jobs' last-run records are read from its backups/)")
 	runJSON := fs.String("run-json", filepath.Join(defaultHome(), "backups", "memrun.json"), "the canary's last result")
 	envFile := fs.String("env", "deploy/.env.gateway", "gateway env file (the approver bot's token and chat)")
@@ -108,7 +109,7 @@ func runReport(args []string, out io.Writer, d reportDeps) error {
 		in.RunNote = err.Error()
 	}
 
-	in.Jobs = jobRecords(*home)
+	in.Jobs = jobRecords(*home, fileExists(*healthEnv))
 
 	o := nightly.PublishOptions{S3: *s3, Expires: *expires, Run: d.run}
 	if *s3 != "" {
@@ -138,18 +139,26 @@ const (
 	backupStamp = "last-success.json"
 	exportStamp = "trace-export.json"
 	dreamStamp  = "dream.json"
+	// the gateway writes this one itself, into its data directory (internal/health)
+	healthStamp = "../gateway/health-sync.json"
 )
 
 func stampPath(home, name string) string { return filepath.Join(home, "backups", name) }
 
+func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
+
 // jobRecords reads the records of the jobs the morning report vouches for.
-func jobRecords(home string) []nightly.Job {
+func jobRecords(home string, health bool) []nightly.Job {
 	var jobs []nightly.Job
-	for _, j := range []struct{ name, file, doc string }{
+	list := []struct{ name, file, doc string }{
 		{"backup", backupStamp, "02:00 IST: stops the stack, takes a verified tarball of ~/.chhaya, restarts, uploads it to S3."},
 		{"trace export", exportStamp, "02:45 IST: builds a trace per recent session from state.db and the audit log and uploads them to the bucket."},
 		{"dreamer", dreamStamp, "02:40 IST: reads new owner conversations, proposes facts to the approver. Marked broken if any conversation errored."},
-	} {
+	}
+	if health {
+		list = append(list, struct{ name, file, doc string }{"health sync", healthStamp, "Every few hours: the Garmin sync fetches yesterday and today and posts them to the gateway's health module, which records the run. Failed or partial runs count as broken."})
+	}
+	for _, j := range list {
 		job := nightly.Job{Name: j.name, Doc: j.doc}
 		if st, err := jobreport.ReadStamp(stampPath(home, j.file)); err == nil {
 			job.Stamp = &st

@@ -41,7 +41,7 @@ func dreamerGateway(t *testing.T, proposalFails *bool) (*Gateway, map[string]int
 	}
 	regs := []Registration{
 		mk("memory.list", policy.Read, Trusted), mk("memory.get", policy.Read, Trusted),
-		mk("memory.propose_update", policy.Write, Trusted), mk("memory.propose_remove", policy.Write, Trusted),
+		mk("memory.propose_update", policy.Write, Trusted), mk("memory.propose_remove", policy.Write, Trusted), mk("health.get_summary", policy.Read, Trusted),
 		mk("capabilities", policy.Read, Trusted),
 		mk("probe.write", policy.Write, Trusted), mk("probe.untrusted", policy.Read, Untrusted),
 	}
@@ -80,7 +80,7 @@ func TestDreamerCanReadMemoryAndProposeAndIsAuditedAsTheDreamer(t *testing.T) {
 
 func TestDreamerIsRefusedEveryOtherToolAndTheRefusalIsAudited(t *testing.T) {
 	g, calls := dreamerGateway(t, nil)
-	for _, tool := range []string{"capabilities", "probe.write", "probe.untrusted", "memory.propose_remove", "memory.merge", "rm.rf"} {
+	for _, tool := range []string{"capabilities", "probe.write", "probe.untrusted", "memory.propose_remove", "health.get_summary", "memory.merge", "rm.rf"} {
 		r := call(g, "dreamer", tool)
 		want := "actor.tool_not_allowed"
 		if tool == "rm.rf" || tool == "memory.merge" {
@@ -95,7 +95,7 @@ func TestDreamerIsRefusedEveryOtherToolAndTheRefusalIsAudited(t *testing.T) {
 			}
 		})
 	}
-	if calls["capabilities"]+calls["probe.write"]+calls["probe.untrusted"]+calls["memory.propose_remove"] != 0 {
+	if calls["capabilities"]+calls["probe.write"]+calls["probe.untrusted"]+calls["memory.propose_remove"]+calls["health.get_summary"] != 0 {
 		t.Fatalf("a refused tool's handler ran: %v", calls)
 	}
 	if g.state.Snapshot(g.now()).Tainted {

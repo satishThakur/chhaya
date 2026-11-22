@@ -275,7 +275,7 @@ chhaya/
     mcpsrv/              # MCP over HTTPS+mTLS; the only path to a tool handler
     tools/               # memory, swiggy, claude_worker, garmin
     config/              # policy.yaml load and validate
-  sync/garmin/           # scheduled pull into SQLite
+  sync/garmin/           # Garmin sync sidecar (Python): fetch, POST to the gateway; the store is TimescaleDB (docs/health.md)
   memory.example/        # generic seed for Personal memory; the real one is data, outside the repo
   hermes/                # config.yaml template, SOUL.md, skills we author
   config/policy.yaml     # caps, allowlists, repo list

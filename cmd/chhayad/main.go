@@ -18,6 +18,7 @@ import (
 	"github.com/satishthakur/chhaya/internal/approval"
 	"github.com/satishthakur/chhaya/internal/audit"
 	"github.com/satishthakur/chhaya/internal/config"
+	"github.com/satishthakur/chhaya/internal/health"
 	"github.com/satishthakur/chhaya/internal/mcpsrv"
 	"github.com/satishthakur/chhaya/internal/memory"
 	"github.com/satishthakur/chhaya/internal/state"
@@ -125,12 +126,20 @@ func run() error {
 		log.Printf("approver bot stopped unexpectedly: %v", err)
 	}()
 
+	// The health module is optional: with no CHHAYA_HEALTH_DB_URL it does not exist. With one, a
+	// store that cannot be reached or a missing secret stops the boot rather than half-starting.
+	hrt, err := health.FromEnv(ctx, os.Getenv, dataDir, w, func() bool { return st.Snapshot(time.Now()).KillSwitch })
+	if err != nil {
+		return err
+	}
+
 	// Build the gateway. Describe is a closure because capabilities needs the
 	// registration list the gateway is being constructed from.
 	var g *mcpsrv.Gateway
 	regs := tools.All(tools.Deps{
 		Version: version, MemoryRoot: memoryRoot, State: st, Config: cfg,
 		Notifier: bot, // a tap on its card is the only path that writes a memory document
+		Health:   healthReader(hrt), HealthLoc: healthLoc(hrt),
 		Describe: func() []mcpsrv.Registration { return g.Registrations() },
 	})
 	g, err = mcpsrv.New(cfg, st, w, bot, regs)
@@ -163,6 +172,23 @@ func run() error {
 		srv.Shutdown(sc)
 	}()
 
+	if hrt != nil {
+		defer hrt.Close()
+		hsrv := &http.Server{Addr: hrt.Addr, Handler: hrt.Ingest, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second}
+		go func() {
+			<-ctx.Done()
+			sc, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			hsrv.Shutdown(sc)
+		}()
+		go func() {
+			log.Printf("health ingest listening on %s (shared secret, no TLS: reachable only on the compose network)", hrt.Addr)
+			if err := hsrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("health ingest stopped: %v", err)
+			}
+		}()
+	}
+
 	log.Printf("listening on %s with mTLS, %d tools registered", addr, len(regs))
 	if err := srv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
 		return err
@@ -175,4 +201,19 @@ func env(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// healthReader and healthLoc keep a nil module from becoming a non-nil interface holding nil.
+func healthReader(r *health.Runtime) health.Reader {
+	if r == nil {
+		return nil
+	}
+	return r.Reader
+}
+
+func healthLoc(r *health.Runtime) *time.Location {
+	if r == nil {
+		return nil
+	}
+	return r.Loc
 }
