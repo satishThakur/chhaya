@@ -551,13 +551,21 @@ install_skills() {
 # health-digest-cron: create the morning health digest as a Hermes cron job if it is not there.
 # 02:30 UTC = 08:00 IST (the box clock is UTC). Delivered to Telegram by Hermes' own bot.
 cmd_health_digest_cron() {
-  local name="Morning Health Digest" have
-  have="$("${COMPOSE[@]}" exec -T hermes hermes cron list 2>/dev/null | grep -c "$name" || true)"
-  if [ "${have:-0}" -gt 0 ]; then grn "exists   $name"; return 0; fi
+  local name="Morning Health Digest" id chat
+  # A bare "telegram" has no target when the job is made from the CLI ("no delivery target
+  # resolved"); it needs the chat id. The owner's private chat id is their user id.
+  chat="$(env_val "$DEPLOY/.env.hermes" TELEGRAM_ALLOWED_USERS | cut -d, -f1 | tr -d ' ')"
+  case "$chat" in ''|*[!0-9]*) die "deploy/.env.hermes needs one numeric TELEGRAM_ALLOWED_USERS to deliver the digest to" ;; esac
   install_skills
+  id="$("${COMPOSE[@]}" exec -T hermes hermes cron list 2>/dev/null | grep -B3 "$name" | grep -oE "[0-9a-f]{12}" | head -1 || true)"
+  if [ -n "$id" ]; then
+    "${COMPOSE[@]}" exec -T hermes hermes cron edit "$id" --deliver "telegram:$chat" >/dev/null || die "hermes cron edit failed"
+    grn "updated  $name -> telegram:<your chat>"
+    return 0
+  fi
   "${COMPOSE[@]}" exec -T hermes hermes cron create "30 2 * * *" \
     "Write today's health digest using the health-digest skill and send it as the reply. Follow the skill exactly." \
-    --name "$name" --skill health-digest --deliver telegram >/dev/null || die "hermes cron create failed"
+    --name "$name" --skill health-digest --deliver "telegram:$chat" >/dev/null || die "hermes cron create failed"
   grn "created  $name (08:00 IST)"
 }
 
